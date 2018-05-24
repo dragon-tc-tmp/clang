@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file contains the implementation of the UnwrappedLineParser,
+/// This file contains the implementation of the UnwrappedLineParser,
 /// which turns a stream of tokens into UnwrappedLines.
 ///
 //===----------------------------------------------------------------------===//
@@ -260,7 +260,7 @@ void UnwrappedLineParser::parse() {
   IndexedTokenSource TokenSource(AllTokens);
   Line->FirstStartColumn = FirstStartColumn;
   do {
-    DEBUG(llvm::dbgs() << "----\n");
+    LLVM_DEBUG(llvm::dbgs() << "----\n");
     reset();
     Tokens = &TokenSource;
     TokenSource.reset();
@@ -449,12 +449,19 @@ void UnwrappedLineParser::calculateBraceTypes(bool ExpectClassBody) {
               (Style.isCpp() && NextTok->is(tok::l_paren)) ||
               NextTok->isOneOf(tok::comma, tok::period, tok::colon,
                                tok::r_paren, tok::r_square, tok::l_brace,
-                               tok::l_square, tok::ellipsis) ||
+                               tok::ellipsis) ||
               (NextTok->is(tok::identifier) &&
                !PrevTok->isOneOf(tok::semi, tok::r_brace, tok::l_brace)) ||
               (NextTok->is(tok::semi) &&
                (!ExpectClassBody || LBraceStack.size() != 1)) ||
               (NextTok->isBinaryOperator() && !NextIsObjCMethod);
+          if (NextTok->is(tok::l_square)) {
+            // We can have an array subscript after a braced init
+            // list, but C++11 attributes are expected after blocks.
+            NextTok = Tokens->getNextToken();
+            ++ReadTokens;
+            ProbablyBracedList = NextTok->isNot(tok::l_square);
+          }
         }
         if (ProbablyBracedList) {
           Tok->BlockKind = BK_BracedInit;
@@ -563,7 +570,7 @@ void UnwrappedLineParser::parseBlock(bool MustBeDeclaration, bool AddLevel,
     Line->MatchingOpeningBlockLineIndex = OpeningLineIndex;
     if (OpeningLineIndex != UnwrappedLine::kInvalidIndex) {
       // Update the opening line to add the forward reference as well
-      (*CurrentLines)[OpeningLineIndex].MatchingOpeningBlockLineIndex =
+      (*CurrentLines)[OpeningLineIndex].MatchingClosingBlockLineIndex =
           CurrentLines->size() - 1;
     }
   }
@@ -1406,13 +1413,16 @@ bool UnwrappedLineParser::tryToParseLambdaIntroducer() {
   const FormatToken *Previous = FormatTok->Previous;
   if (Previous &&
       (Previous->isOneOf(tok::identifier, tok::kw_operator, tok::kw_new,
-                         tok::kw_delete) ||
+                         tok::kw_delete, tok::l_square) ||
        FormatTok->isCppStructuredBinding(Style) || Previous->closesScope() ||
        Previous->isSimpleTypeSpecifier())) {
     nextToken();
     return false;
   }
   nextToken();
+  if (FormatTok->is(tok::l_square)) {
+    return false;
+  }
   parseSquare(/*LambdaIntroducer=*/true);
   return true;
 }
@@ -2314,7 +2324,7 @@ LLVM_ATTRIBUTE_UNUSED static void printDebugInfo(const UnwrappedLine &Line,
 void UnwrappedLineParser::addUnwrappedLine() {
   if (Line->Tokens.empty())
     return;
-  DEBUG({
+  LLVM_DEBUG({
     if (CurrentLines == &Lines)
       printDebugInfo(*Line);
   });

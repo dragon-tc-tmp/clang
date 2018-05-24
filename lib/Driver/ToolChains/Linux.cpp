@@ -22,6 +22,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/ScopedPrinter.h"
 #include <system_error>
 
 using namespace clang::driver;
@@ -31,7 +32,7 @@ using namespace llvm::opt;
 
 using tools::addPathIfExists;
 
-/// \brief Get our best guess at the multiarch triple for a target.
+/// Get our best guess at the multiarch triple for a target.
 ///
 /// Debian-based systems are starting to use a multiarch setup where they use
 /// a target-triple directory in the library and header search paths.
@@ -350,6 +351,21 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
 
   addPathIfExists(D, SysRoot + "/lib/" + MultiarchTriple, Paths);
   addPathIfExists(D, SysRoot + "/lib/../" + OSLibDir, Paths);
+
+  if (IsAndroid) {
+    // Android sysroots contain a library directory for each supported OS
+    // version as well as some unversioned libraries in the usual multiarch
+    // directory.
+    unsigned Major;
+    unsigned Minor;
+    unsigned Micro;
+    Triple.getEnvironmentVersion(Major, Minor, Micro);
+    addPathIfExists(D,
+                    SysRoot + "/usr/lib/" + MultiarchTriple + "/" +
+                        llvm::to_string(Major),
+                    Paths);
+  }
+
   addPathIfExists(D, SysRoot + "/usr/lib/" + MultiarchTriple, Paths);
   addPathIfExists(D, SysRoot + "/usr/lib/../" + OSLibDir, Paths);
   if (IsRISCV) {
@@ -412,6 +428,15 @@ Tool *Linux::buildAssembler() const {
 std::string Linux::computeSysRoot() const {
   if (!getDriver().SysRoot.empty())
     return getDriver().SysRoot;
+
+  if (getTriple().isAndroid()) {
+    // Android toolchains typically include a sysroot at ../sysroot relative to
+    // the clang binary.
+    const StringRef ClangDir = getDriver().getInstalledDir();
+    std::string AndroidSysRootPath = (ClangDir + "/../sysroot").str();
+    if (getVFS().exists(AndroidSysRootPath))
+      return AndroidSysRootPath;
+  }
 
   if (!GCCInstallation.isValid() || !tools::isMipsArch(getTriple().getArch()))
     return std::string();
@@ -775,21 +800,23 @@ static std::string DetectLibcxxIncludePath(StringRef base) {
   return MaxVersion ? (base + "/" + MaxVersionString).str() : "";
 }
 
-std::string Linux::findLibCxxIncludePath() const {
+void Linux::addLibCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
+                                  llvm::opt::ArgStringList &CC1Args) const {
+  const std::string& SysRoot = computeSysRoot();
   const std::string LibCXXIncludePathCandidates[] = {
       DetectLibcxxIncludePath(getDriver().Dir + "/../include/c++"),
       // If this is a development, non-installed, clang, libcxx will
       // not be found at ../include/c++ but it likely to be found at
       // one of the following two locations:
-      DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/local/include/c++"),
-      DetectLibcxxIncludePath(getDriver().SysRoot + "/usr/include/c++") };
+      DetectLibcxxIncludePath(SysRoot + "/usr/local/include/c++"),
+      DetectLibcxxIncludePath(SysRoot + "/usr/include/c++") };
   for (const auto &IncludePath : LibCXXIncludePathCandidates) {
     if (IncludePath.empty() || !getVFS().exists(IncludePath))
       continue;
     // Use the first candidate that exists.
-    return IncludePath;
+    addSystemInclude(DriverArgs, CC1Args, IncludePath);
+    return;
   }
-  return "";
 }
 
 void Linux::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
@@ -899,8 +926,10 @@ SanitizerMask Linux::getSupportedSanitizers() const {
     Res |= SanitizerKind::Function;
   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsX86 || IsMIPS || IsArmArch)
     Res |= SanitizerKind::Scudo;
-  if (IsX86_64 || IsAArch64)
+  if (IsX86_64 || IsAArch64) {
     Res |= SanitizerKind::HWAddress;
+    Res |= SanitizerKind::KernelHWAddress;
+  }
   return Res;
 }
 

@@ -40,8 +40,8 @@ protected:
 
   std::string format(llvm::StringRef Code,
                      StatusCheck CheckComplete = SC_ExpectComplete) {
-    DEBUG(llvm::errs() << "---\n");
-    DEBUG(llvm::errs() << Code << "\n\n");
+    LLVM_DEBUG(llvm::errs() << "---\n");
+    LLVM_DEBUG(llvm::errs() << Code << "\n\n");
     std::vector<tooling::Range> Ranges(1, tooling::Range(0, Code.size()));
     FormattingAttemptStatus Status;
     tooling::Replacements Replaces =
@@ -53,7 +53,7 @@ protected:
     }
     auto Result = applyAllReplacements(Code, Replaces);
     EXPECT_TRUE(static_cast<bool>(Result));
-    DEBUG(llvm::errs() << "\n" << *Result << "\n\n");
+    LLVM_DEBUG(llvm::errs() << "\n" << *Result << "\n\n");
     return *Result;
   }
 
@@ -299,13 +299,13 @@ TEST_F(FormatTestObjC, FormatObjCInterface) {
                "+ (id)init;\n"
                "@end");
 
-  verifyFormat("@interface Foo <Baz : Blech> : Bar <Baz, Quux> {\n"
+  verifyFormat("@interface Foo<Baz : Blech> : Bar <Baz, Quux> {\n"
                "  int _i;\n"
                "}\n"
                "+ (id)init;\n"
                "@end");
 
-  verifyFormat("@interface Foo <Bar : Baz <Blech>> : Xyzzy <Corge> {\n"
+  verifyFormat("@interface Foo<Bar : Baz <Blech>> : Xyzzy <Corge> {\n"
                "  int _i;\n"
                "}\n"
                "+ (id)init;\n"
@@ -333,6 +333,9 @@ TEST_F(FormatTestObjC, FormatObjCInterface) {
   verifyFormat("@interface ccccccccccccc () <\n"
                "    ccccccccccccc, ccccccccccccc,\n"
                "    ccccccccccccc, ccccccccccccc> {\n"
+               "}");
+  verifyFormat("@interface ccccccccccccc (ccccccccccc) <\n"
+               "    ccccccccccccc> {\n"
                "}");
   Style.ObjCBinPackProtocolList = FormatStyle::BPS_Never;
   verifyFormat("@interface ddddddddddddd () <\n"
@@ -536,39 +539,7 @@ TEST_F(FormatTestObjC, FormatObjCMethodDeclarations) {
                "            ofSize:(size_t)height\n"
                "                  :(size_t)width;");
   Style.ColumnLimit = 40;
-  // Make sure selectors with 0, 1, or more arguments are not indented
-  // when IndentWrappedFunctionNames is false.
-  Style.IndentWrappedFunctionNames = false;
-  verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa;\n");
-  verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a;\n");
-  verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a;\n");
-  verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-               " aaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a;\n");
-  verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
-               "aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a\n"
-               " aaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a;\n");
-
-  // Continuation indent width should win over aligning colons if the function
-  // name is long.
-  Style = getGoogleStyle(FormatStyle::LK_ObjC);
-  Style.ColumnLimit = 40;
-  Style.IndentWrappedFunctionNames = true;
-  verifyFormat("- (void)shortf:(GTMFoo *)theFoo\n"
-               "    dontAlignNamef:(NSRect)theRect {\n"
-               "}");
-
-  // Make sure we don't break aligning for short parameter names.
-  verifyFormat("- (void)shortf:(GTMFoo *)theFoo\n"
-               "       aShortf:(NSRect)theRect {\n"
-               "}");
-
-  // Make sure selectors with 0, 1, or more arguments are indented
-  // when IndentWrappedFunctionNames is true.
+  // Make sure selectors with 0, 1, or more arguments are indented when wrapped.
   verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaa;\n");
   verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
@@ -582,6 +553,19 @@ TEST_F(FormatTestObjC, FormatObjCMethodDeclarations) {
   verifyFormat("- (aaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\n"
                "    aaaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a\n"
                "     aaaaaaaaaaaaaaaaaaaaaaaaaaa:(int)a;\n");
+
+  // Continuation indent width should win over aligning colons if the function
+  // name is long.
+  Style = getGoogleStyle(FormatStyle::LK_ObjC);
+  Style.ColumnLimit = 40;
+  verifyFormat("- (void)shortf:(GTMFoo *)theFoo\n"
+               "    dontAlignNamef:(NSRect)theRect {\n"
+               "}");
+
+  // Make sure we don't break aligning for short parameter names.
+  verifyFormat("- (void)shortf:(GTMFoo *)theFoo\n"
+               "       aShortf:(NSRect)theRect {\n"
+               "}");
 
   // Format pairs correctly.
   Style.ColumnLimit = 80;
@@ -808,6 +792,45 @@ TEST_F(FormatTestObjC, FormatObjCMethodExpr) {
                "      a = 42;\n"
                "    }];");
 
+  // Space between cast rparen and selector name component.
+  verifyFormat("[((Foo *)foo) bar];");
+  verifyFormat("[((Foo *)foo) bar:1 blech:2];");
+
+  // Message receiver taking multiple lines.
+  Style.ColumnLimit = 20;
+  // Non-corner case.
+  verifyFormat("[[object block:^{\n"
+               "  return 42;\n"
+               "}] a:42 b:42];");
+  // Arguments just fit into one line.
+  verifyFormat("[[object block:^{\n"
+               "  return 42;\n"
+               "}] aaaaaaa:42 b:42];");
+  // Arguments just over a column limit.
+  verifyFormat("[[object block:^{\n"
+               "  return 42;\n"
+               "}] aaaaaaa:42\n"
+               "        bb:42];");
+  // Arguments just fit into one line.
+  Style.ColumnLimit = 23;
+  verifyFormat("[[obj a:42\n"
+               "      b:42\n"
+               "      c:42\n"
+               "      d:42] e:42 f:42];");
+
+  // Arguments do not fit into one line with a receiver.
+  Style.ColumnLimit = 20;
+  verifyFormat("[[obj a:42] a:42\n"
+               "            b:42];");
+  verifyFormat("[[obj a:42] a:42\n"
+               "            b:42\n"
+               "            c:42];");
+  verifyFormat("[[obj aaaaaa:42\n"
+               "           b:42]\n"
+               "    cc:42\n"
+               "     d:42];");
+
+
   Style.ColumnLimit = 70;
   verifyFormat(
       "void f() {\n"
@@ -961,7 +984,7 @@ TEST_F(FormatTestObjC, ObjCForIn) {
                "     }]) {\n}");
 }
 
-TEST_F(FormatTestObjC, ObjCNew) {
+TEST_F(FormatTestObjC, ObjCCxxKeywords) {
   verifyFormat("+ (instancetype)new {\n"
                "  return nil;\n"
                "}\n");
@@ -970,6 +993,17 @@ TEST_F(FormatTestObjC, ObjCNew) {
                "}\n");
   verifyFormat("SEL NewSelector(void) { return @selector(new); }\n");
   verifyFormat("SEL MacroSelector(void) { return MACRO(new); }\n");
+  verifyFormat("+ (instancetype)delete {\n"
+               "  return nil;\n"
+               "}\n");
+  verifyFormat("+ (instancetype)myDelete {\n"
+               "  return [self delete];\n"
+               "}\n");
+  verifyFormat("SEL DeleteSelector(void) { return @selector(delete); }\n");
+  verifyFormat("SEL MacroSelector(void) { return MACRO(delete); }\n");
+  verifyFormat("MACRO(new:)\n");
+  verifyFormat("MACRO(delete:)\n");
+  verifyFormat("foo = @{MACRO(new:) : MACRO(delete:)}\n");
 }
 
 TEST_F(FormatTestObjC, ObjCLiterals) {
@@ -1147,6 +1181,18 @@ TEST_F(FormatTestObjC, ObjCArrayLiterals) {
                "  @\"aaaaaaaaaaaaaaaaaaaaaaaaaa\"\n"
                "];\n");
 }
+
+TEST_F(FormatTestObjC, BreaksCallStatementWhereSemiJustOverTheLimit) {
+  Style.ColumnLimit = 60;
+  // If the statement starting with 'a = ...' is put on a single line, the ';'
+  // is at line 61.
+  verifyFormat("int f(int a) {\n"
+               "  a = [self aaaaaaaaaa:bbbbbbbbb\n"
+               "             ccccccccc:dddddddd\n"
+               "                    ee:fddd];\n"
+               "}");
+}
+
 } // end namespace
 } // end namespace format
 } // end namespace clang

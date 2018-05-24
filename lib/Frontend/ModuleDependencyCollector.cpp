@@ -16,6 +16,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Serialization/ASTReader.h"
 #include "llvm/ADT/iterator_range.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
@@ -49,7 +50,8 @@ struct ModuleDependencyPPCallbacks : public PPCallbacks {
                           StringRef FileName, bool IsAngled,
                           CharSourceRange FilenameRange, const FileEntry *File,
                           StringRef SearchPath, StringRef RelativePath,
-                          const Module *Imported) override {
+                          const Module *Imported,
+                          SrcMgr::CharacteristicKind FileType) override {
     if (!File)
       return;
     Collector.addFile(File->getName());
