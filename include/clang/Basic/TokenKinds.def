@@ -391,6 +391,8 @@ KEYWORD(_Float16                    , KEYALL)
 
 // ISO/IEC JTC1 SC22 WG14 N1169 Extension
 KEYWORD(_Accum                      , KEYNOCXX)
+KEYWORD(_Fract                      , KEYNOCXX)
+KEYWORD(_Sat                        , KEYNOCXX)
 
 // GNU Extensions (in impl-reserved namespace)
 KEYWORD(_Decimal32                  , KEYALL)
@@ -423,6 +425,7 @@ KEYWORD(typeof                      , KEYGNU)
 KEYWORD(__FUNCDNAME__               , KEYMS)
 KEYWORD(__FUNCSIG__                 , KEYMS)
 KEYWORD(L__FUNCTION__               , KEYMS)
+KEYWORD(L__FUNCSIG__                , KEYMS)
 TYPE_TRAIT_1(__is_interface_class, IsInterfaceClass, KEYMS)
 TYPE_TRAIT_1(__is_sealed, IsSealed, KEYMS)
 

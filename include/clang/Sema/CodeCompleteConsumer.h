@@ -45,8 +45,9 @@ class LangOptions;
 class NamedDecl;
 class NestedNameSpecifier;
 class Preprocessor;
-class Sema;
 class RawComment;
+class Sema;
+class UsingShadowDecl;
 
 /// Default priority values for code-completion results based
 /// on their kind.
@@ -554,14 +555,14 @@ private:
 
   /// The availability of this code-completion result.
   unsigned Availability : 2;
-  
+
   /// The name of the parent context.
   StringRef ParentName;
 
   /// A brief documentation comment attached to the declaration of
   /// entity being completed by this result.
   const char *BriefComment;
-  
+
   CodeCompletionString(const Chunk *Chunks, unsigned NumChunks,
                        unsigned Priority, CXAvailabilityKind Availability,
                        const char **Annotations, unsigned NumAnnotations,
@@ -599,7 +600,7 @@ public:
 
   /// Retrieve the annotation string specified by \c AnnotationNr.
   const char *getAnnotation(unsigned AnnotationNr) const;
-  
+
   /// Retrieve the name of the parent context.
   StringRef getParentContextName() const {
     return ParentName;
@@ -608,7 +609,7 @@ public:
   const char *getBriefComment() const {
     return BriefComment;
   }
-  
+
   /// Retrieve a string representation of the code completion string,
   /// which is mainly useful for debugging.
   std::string getAsString() const;
@@ -669,7 +670,7 @@ private:
   CXAvailabilityKind Availability = CXAvailability_Available;
   StringRef ParentName;
   const char *BriefComment = nullptr;
-  
+
   /// The chunks stored in this string.
   SmallVector<Chunk, 4> Chunks;
 
@@ -728,7 +729,7 @@ public:
 
   const char *getBriefComment() const { return BriefComment; }
   void addBriefComment(StringRef Comment);
-  
+
   StringRef getParentName() const { return ParentName; }
 };
 
@@ -783,30 +784,33 @@ public:
   /// The availability of this result.
   CXAvailabilityKind Availability = CXAvailability_Available;
 
-  /// FixIts that *must* be applied before inserting the text for the
-  /// corresponding completion item.
+  /// Fix-its that *must* be applied before inserting the text for the
+  /// corresponding completion.
   ///
-  /// Completion items with non-empty fixits will not be returned by default,
-  /// they should be explicitly requested by setting
-  /// CompletionOptions::IncludeFixIts. For the editors to be able to
-  /// compute position of the cursor for the completion item itself, the
-  /// following conditions are guaranteed to hold for RemoveRange of the stored
-  /// fixits:
-  ///  - Ranges in the fixits are guaranteed to never contain the completion
+  /// By default, CodeCompletionBuilder only returns completions with empty
+  /// fix-its. Extra completions with non-empty fix-its should be explicitly
+  /// requested by setting CompletionOptions::IncludeFixIts.
+  ///
+  /// For the clients to be able to compute position of the cursor after
+  /// applying fix-its, the following conditions are guaranteed to hold for
+  /// RemoveRange of the stored fix-its:
+  ///  - Ranges in the fix-its are guaranteed to never contain the completion
   ///  point (or identifier under completion point, if any) inside them, except
   ///  at the start or at the end of the range.
-  ///  - If a fixit range starts or ends with completion point (or starts or
+  ///  - If a fix-it range starts or ends with completion point (or starts or
   ///  ends after the identifier under completion point), it will contain at
   ///  least one character. It allows to unambiguously recompute completion
-  ///  point after applying the fixit.
-  /// The intuition is that provided fixits change code around the identifier we
-  /// complete, but are not allowed to touch the identifier itself or the
-  /// completion point. One example of completion items with corrections are the
-  /// ones replacing '.' with '->' and vice versa:
+  ///  point after applying the fix-it.
+  ///
+  /// The intuition is that provided fix-its change code around the identifier
+  /// we complete, but are not allowed to touch the identifier itself or the
+  /// completion point. One example of completions with corrections are the ones
+  /// replacing '.' with '->' and vice versa:
+  ///
   /// std::unique_ptr<std::vector<int>> vec_ptr;
-  /// In 'vec_ptr.^', one of completion items is 'push_back', it requires
+  /// In 'vec_ptr.^', one of the completions is 'push_back', it requires
   /// replacing '.' with '->'.
-  /// In 'vec_ptr->^', one of completion items is 'release', it requires
+  /// In 'vec_ptr->^', one of the completions is 'release', it requires
   /// replacing '->' with '.'.
   std::vector<FixItHint> FixIts;
 
@@ -833,6 +837,12 @@ public:
   /// informative rather than required.
   NestedNameSpecifier *Qualifier = nullptr;
 
+  /// If this Decl was unshadowed by using declaration, this can store a
+  /// pointer to the UsingShadowDecl which was used in the unshadowing process.
+  /// This information can be used to uprank CodeCompletionResults / which have
+  /// corresponding `using decl::qualified::name;` nearby.
+  const UsingShadowDecl *ShadowDecl = nullptr;
+
   /// Build a result that refers to a declaration.
   CodeCompletionResult(const NamedDecl *Declaration, unsigned Priority,
                        NestedNameSpecifier *Qualifier = nullptr,
@@ -844,7 +854,7 @@ public:
         QualifierIsInformative(QualifierIsInformative),
         StartsNestedNameSpecifier(false), AllParametersAreInformative(false),
         DeclaringEntity(false), Qualifier(Qualifier) {
-    //FIXME: Add assert to check FixIts range requirements.
+    // FIXME: Add assert to check FixIts range requirements.
     computeCursorKindAndAvailability(Accessible);
   }
 
@@ -883,11 +893,13 @@ public:
         StartsNestedNameSpecifier(false), AllParametersAreInformative(false),
         DeclaringEntity(false) {
     computeCursorKindAndAvailability();
-  }  
-  
-  /// Retrieve the declaration stored in this result.
+  }
+
+  /// Retrieve the declaration stored in this result. This might be nullptr if
+  /// Kind is RK_Pattern.
   const NamedDecl *getDeclaration() const {
-    assert(Kind == RK_Declaration && "Not a declaration result");
+    assert(((Kind == RK_Declaration) || (Kind == RK_Pattern)) &&
+           "Not a declaration or pattern result");
     return Declaration;
   }
 
@@ -915,6 +927,13 @@ public:
                                            CodeCompletionAllocator &Allocator,
                                            CodeCompletionTUInfo &CCTUInfo,
                                            bool IncludeBriefComments);
+  /// Creates a new code-completion string for the macro result. Similar to the
+  /// above overloads, except this only requires preprocessor information.
+  /// The result kind must be `RK_Macro`.
+  CodeCompletionString *
+  CreateCodeCompletionStringForMacro(Preprocessor &PP,
+                                     CodeCompletionAllocator &Allocator,
+                                     CodeCompletionTUInfo &CCTUInfo);
 
   /// Retrieve the name that should be used to order a result.
   ///

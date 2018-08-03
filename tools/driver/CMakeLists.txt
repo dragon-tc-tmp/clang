@@ -63,10 +63,6 @@ add_dependencies(clang clang-headers)
 
 if(NOT CLANG_LINKS_TO_CREATE)
   set(CLANG_LINKS_TO_CREATE clang++ clang-cl clang-cpp)
-
-  if (MSVC)
-    list(APPEND CLANG_LINKS_TO_CREATE ../msbuild-bin/cl)
-  endif()
 endif()
 
 foreach(link ${CLANG_LINKS_TO_CREATE})
@@ -99,10 +95,10 @@ if (APPLE)
 endif()
 
 if(CLANG_ORDER_FILE AND
-   (LD64_EXECUTABLE OR LLVM_LINKER_IS_GOLD OR LLVM_LINKER_IS_LLD))
+    (LLVM_LINKER_IS_LD64 OR LLVM_LINKER_IS_GOLD OR LLVM_LINKER_IS_LLD))
   include(CheckLinkerFlag)
 
-  if (LD64_EXECUTABLE)
+  if (LLVM_LINKER_IS_LD64)
     set(LINKER_ORDER_FILE_OPTION "-Wl,-order_file,${CLANG_ORDER_FILE}")
   elseif (LLVM_LINKER_IS_GOLD)
     set(LINKER_ORDER_FILE_OPTION "-Wl,--section-ordering-file,${CLANG_ORDER_FILE}")

@@ -450,7 +450,8 @@ __m128 test_mm_min_ss(__m128 A, __m128 B) {
 
 __m128 test_mm_move_ss(__m128 A, __m128 B) {
   // CHECK-LABEL: test_mm_move_ss
-  // CHECK: shufflevector <4 x float> %{{.*}}, <4 x float> %{{.*}}, <4 x i32> <i32 4, i32 1, i32 2, i32 3>
+  // CHECK: extractelement <4 x float> %{{.*}}, i32 0
+  // CHECK: insertelement <4 x float> %{{.*}}, float %{{.*}}, i32 0
   return _mm_move_ss(A, B);
 }
 
@@ -639,13 +640,15 @@ __m128 test_mm_shuffle_ps(__m128 A, __m128 B) {
 
 __m128 test_mm_sqrt_ps(__m128 x) {
   // CHECK-LABEL: test_mm_sqrt_ps
-  // CHECK: call <4 x float> @llvm.x86.sse.sqrt.ps(<4 x float> {{.*}})
+  // CHECK: call <4 x float> @llvm.sqrt.v4f32(<4 x float> {{.*}})
   return _mm_sqrt_ps(x);
 }
 
 __m128 test_sqrt_ss(__m128 x) {
   // CHECK: define {{.*}} @test_sqrt_ss
-  // CHECK: call <4 x float> @llvm.x86.sse.sqrt.ss
+  // CHECK: extractelement <4 x float> {{.*}}, i64 0
+  // CHECK: call float @llvm.sqrt.f32(float {{.*}})
+  // CHECK: insertelement <4 x float> {{.*}}, float {{.*}}, i64 0
   return _mm_sqrt_ss(x);
 }
 

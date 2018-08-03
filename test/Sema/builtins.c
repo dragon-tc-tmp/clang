@@ -248,3 +248,26 @@ char * Test20(char *p, const char *in, unsigned n)
 
     return buf;
 }
+
+void test22(void) {
+  (void)__builtin_signbit(); // expected-error{{too few arguments to function call, expected 1, have 0}}
+  (void)__builtin_signbit(1.0, 2.0, 3.0); // expected-error{{too many arguments to function call, expected 1, have 3}}
+  (void)__builtin_signbit(1); // expected-error {{floating point classification requires argument of floating point type (passed in 'int')}}
+  (void)__builtin_signbit(1.0);
+  (void)__builtin_signbit(1.0f);
+  (void)__builtin_signbit(1.0L);
+
+  (void)__builtin_signbitf(); // expected-error{{too few arguments to function call, expected 1, have 0}}
+  (void)__builtin_signbitf(1.0, 2.0, 3.0); // expected-error{{too many arguments to function call, expected 1, have 3}}
+  (void)__builtin_signbitf(1);
+  (void)__builtin_signbitf(1.0);
+  (void)__builtin_signbitf(1.0f);
+  (void)__builtin_signbitf(1.0L);
+
+  (void)__builtin_signbitl(); // expected-error{{too few arguments to function call, expected 1, have 0}}
+  (void)__builtin_signbitl(1.0, 2.0, 3.0); // expected-error{{too many arguments to function call, expected 1, have 3}}
+  (void)__builtin_signbitl(1);
+  (void)__builtin_signbitl(1.0);
+  (void)__builtin_signbitl(1.0f);
+  (void)__builtin_signbitl(1.0L);
+}

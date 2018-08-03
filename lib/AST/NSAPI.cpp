@@ -432,7 +432,7 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
     return NSAPI::NSNumberWithDouble;
   case BuiltinType::Bool:
     return NSAPI::NSNumberWithBool;
-    
+
   case BuiltinType::Void:
   case BuiltinType::WChar_U:
   case BuiltinType::WChar_S:
@@ -447,6 +447,24 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   case BuiltinType::UShortAccum:
   case BuiltinType::UAccum:
   case BuiltinType::ULongAccum:
+  case BuiltinType::ShortFract:
+  case BuiltinType::Fract:
+  case BuiltinType::LongFract:
+  case BuiltinType::UShortFract:
+  case BuiltinType::UFract:
+  case BuiltinType::ULongFract:
+  case BuiltinType::SatShortAccum:
+  case BuiltinType::SatAccum:
+  case BuiltinType::SatLongAccum:
+  case BuiltinType::SatUShortAccum:
+  case BuiltinType::SatUAccum:
+  case BuiltinType::SatULongAccum:
+  case BuiltinType::SatShortFract:
+  case BuiltinType::SatFract:
+  case BuiltinType::SatLongFract:
+  case BuiltinType::SatUShortFract:
+  case BuiltinType::SatUFract:
+  case BuiltinType::SatULongFract:
   case BuiltinType::UInt128:
   case BuiltinType::Float16:
   case BuiltinType::Float128:
@@ -473,7 +491,7 @@ NSAPI::getNSNumberFactoryMethodKind(QualType T) const {
   case BuiltinType::OMPArraySection:
     break;
   }
-  
+
   return None;
 }
 
@@ -493,7 +511,7 @@ bool NSAPI::isObjCNSUIntegerType(QualType T) const {
 StringRef NSAPI::GetNSIntegralKind(QualType T) const {
   if (!Ctx.getLangOpts().ObjC1 || T.isNull())
     return StringRef();
-  
+
   while (const TypedefType *TDT = T->getAs<TypedefType>()) {
     StringRef NSIntegralResust =
       llvm::StringSwitch<StringRef>(

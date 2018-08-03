@@ -23,7 +23,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TargetOptions.h"
 #include "clang/Basic/Version.h"
-#include "clang/Basic/VersionTuple.h"
 #include "clang/Basic/VirtualFileSystem.h"
 #include "clang/Basic/Visibility.h"
 #include "clang/Basic/XRayInstr.h"
@@ -76,6 +75,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
@@ -690,7 +690,9 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
                         Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
                         Args.hasArg(OPT_cl_fast_relaxed_math));
   Opts.Reassociate = Args.hasArg(OPT_mreassociate);
-  Opts.FlushDenorm = Args.hasArg(OPT_cl_denorms_are_zero);
+  Opts.FlushDenorm = Args.hasArg(OPT_cl_denorms_are_zero) ||
+                     (Args.hasArg(OPT_fcuda_is_device) &&
+                      Args.hasArg(OPT_fcuda_flush_denormals_to_zero));
   Opts.CorrectlyRoundedDivSqrt =
       Args.hasArg(OPT_cl_fp32_correctly_rounded_divide_sqrt);
   Opts.UniformWGSize =
@@ -719,6 +721,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
   Opts.StrictEnums = Args.hasArg(OPT_fstrict_enums);
   Opts.StrictReturn = !Args.hasArg(OPT_fno_strict_return);
   Opts.StrictVTablePointers = Args.hasArg(OPT_fstrict_vtable_pointers);
+  Opts.ForceEmitVTables = Args.hasArg(OPT_fforce_emit_vtables);
   Opts.UnsafeFPMath = Args.hasArg(OPT_menable_unsafe_fp_math) ||
                       Args.hasArg(OPT_cl_unsafe_math_optimizations) ||
                       Args.hasArg(OPT_cl_fast_relaxed_math);
@@ -745,14 +748,16 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
 
   Opts.NoUseJumpTables = Args.hasArg(OPT_fno_jump_tables);
 
+  Opts.NullPointerIsValid = Args.hasArg(OPT_fno_delete_null_pointer_checks);
+
   Opts.ProfileSampleAccurate = Args.hasArg(OPT_fprofile_sample_accurate);
 
   Opts.PrepareForLTO = Args.hasArg(OPT_flto, OPT_flto_EQ);
-  Opts.EmitSummaryIndex = false;
+  Opts.PrepareForThinLTO = false;
   if (Arg *A = Args.getLastArg(OPT_flto_EQ)) {
     StringRef S = A->getValue();
     if (S == "thin")
-      Opts.EmitSummaryIndex = true;
+      Opts.PrepareForThinLTO = true;
     else if (S != "full")
       Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args) << S;
   }
@@ -805,7 +810,7 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       }
     }
   }
-	// Handle -fembed-bitcode option.
+  // Handle -fembed-bitcode option.
   if (Arg *A = Args.getLastArg(OPT_fembed_bitcode_EQ)) {
     StringRef Name = A->getValue();
     unsigned Model = llvm::StringSwitch<unsigned>(Name)
@@ -1117,6 +1122,8 @@ static bool ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args, InputKind IK,
       Args, OPT_fsanitize_undefined_strip_path_components_EQ, 0, Diags);
 
   Opts.EmitVersionIdentMetadata = Args.hasFlag(OPT_Qy, OPT_Qn, true);
+
+  Opts.Addrsig = Args.hasArg(OPT_faddrsig);
 
   return Success;
 }
@@ -1545,7 +1552,6 @@ static InputKind ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     = Args.getLastArgValue(OPT_foverride_record_layout_EQ);
   Opts.AuxTriple =
       llvm::Triple::normalize(Args.getLastArgValue(OPT_aux_triple));
-  Opts.FindPchSource = Args.getLastArgValue(OPT_find_pch_source_EQ);
   Opts.StatsFile = Args.getLastArgValue(OPT_stats_file);
 
   if (const Arg *A = Args.getLastArg(OPT_arcmt_check,
@@ -2173,6 +2179,8 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.GNUKeywords = Args.hasFlag(OPT_fgnu_keywords, OPT_fno_gnu_keywords,
                                   Opts.GNUKeywords);
 
+  Opts.Digraphs = Args.hasFlag(OPT_fdigraphs, OPT_fno_digraphs, Opts.Digraphs);
+
   if (Args.hasArg(OPT_fno_operator_names))
     Opts.CXXOperatorNames = 0;
 
@@ -2184,9 +2192,6 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
 
   if (Args.hasArg(OPT_fno_cuda_host_device_constexpr))
     Opts.CUDAHostDeviceConstexpr = 0;
-
-  if (Opts.CUDAIsDevice && Args.hasArg(OPT_fcuda_flush_denormals_to_zero))
-    Opts.CUDADeviceFlushDenormalsToZero = 1;
 
   if (Opts.CUDAIsDevice && Args.hasArg(OPT_fcuda_approx_transcendentals))
     Opts.CUDADeviceApproxTranscendentals = 1;
@@ -2337,6 +2342,11 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.FixedPoint =
       Args.hasFlag(OPT_ffixed_point, OPT_fno_fixed_point, /*Default=*/false) &&
       !Opts.CPlusPlus;
+  Opts.PaddingOnUnsignedFixedPoint =
+      Args.hasFlag(OPT_fpadding_on_unsigned_fixed_point,
+                   OPT_fno_padding_on_unsigned_fixed_point,
+                   /*Default=*/false) &&
+      Opts.FixedPoint;
 
   // Handle exception personalities
   Arg *A = Args.getLastArg(options::OPT_fsjlj_exceptions,
@@ -2344,6 +2354,11 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
                            options::OPT_fdwarf_exceptions);
   if (A) {
     const Option &Opt = A->getOption();
+    llvm::Triple T(TargetOpts.Triple);
+    if (T.isWindowsMSVCEnvironment())
+      Diags.Report(diag::err_fe_invalid_exception_model)
+          << Opt.getName() << T.str();
+
     Opts.SjLjExceptions = Opt.matches(options::OPT_fsjlj_exceptions);
     Opts.SEHExceptions = Opt.matches(options::OPT_fseh_exceptions);
     Opts.DWARFExceptions = Opt.matches(options::OPT_fdwarf_exceptions);
@@ -2579,13 +2594,15 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       Opts.OpenMP && !Args.hasArg(options::OPT_fnoopenmp_use_tls);
   Opts.OpenMPIsDevice =
       Opts.OpenMP && Args.hasArg(options::OPT_fopenmp_is_device);
+  bool IsTargetSpecified =
+      Opts.OpenMPIsDevice || Args.hasArg(options::OPT_fopenmp_targets_EQ);
 
   if (Opts.OpenMP || Opts.OpenMPSimd) {
-    if (int Version =
-            getLastArgIntValue(Args, OPT_fopenmp_version_EQ,
-                               IsSimdSpecified ? 45 : Opts.OpenMP, Diags))
+    if (int Version = getLastArgIntValue(
+            Args, OPT_fopenmp_version_EQ,
+            (IsSimdSpecified || IsTargetSpecified) ? 45 : Opts.OpenMP, Diags))
       Opts.OpenMP = Version;
-    else if (IsSimdSpecified)
+    else if (IsSimdSpecified || IsTargetSpecified)
       Opts.OpenMP = 45;
     // Provide diagnostic when a given target is not expected to be an OpenMP
     // device or host.
@@ -2730,6 +2747,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       Args.getAllArgValues(OPT_fxray_never_instrument);
   Opts.XRayAttrListFiles = Args.getAllArgValues(OPT_fxray_attr_list);
 
+  // -fforce-emit-vtables
+  Opts.ForceEmitVTables = Args.hasArg(OPT_fforce_emit_vtables);
+
   // -fallow-editor-placeholders
   Opts.AllowEditorPlaceholders = Args.hasArg(OPT_fallow_editor_placeholders);
 
@@ -2763,6 +2783,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   }
 
   Opts.CompleteMemberPointers = Args.hasArg(OPT_fcomplete_member_pointers);
+  Opts.BuildingPCHWithObjectFile = Args.hasArg(OPT_building_pch_with_obj);
 }
 
 static bool isStrictlyPreprocessorAction(frontend::ActionKind Action) {
@@ -2813,6 +2834,7 @@ static void ParsePreprocessorArgs(PreprocessorOptions &Opts, ArgList &Args,
                                   frontend::ActionKind Action) {
   Opts.ImplicitPCHInclude = Args.getLastArgValue(OPT_include_pch);
   Opts.ImplicitPTHInclude = Args.getLastArgValue(OPT_include_pth);
+  Opts.PCHThroughHeader = Args.getLastArgValue(OPT_pch_through_header_EQ);
   if (const Arg *A = Args.getLastArg(OPT_token_cache))
       Opts.TokenCache = A->getValue();
   else

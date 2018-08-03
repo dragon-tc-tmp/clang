@@ -590,24 +590,12 @@ void ExprEngine::VisitDeclStmt(const DeclStmt *DS, ExplodedNode *Pred,
       SVal InitVal = state->getSVal(InitEx, LC);
 
       assert(DS->isSingleDecl());
-      if (auto *CtorExpr = findDirectConstructorForCurrentCFGElement()) {
-        assert(InitEx->IgnoreImplicit() == CtorExpr);
-        (void)CtorExpr;
+      if (getObjectUnderConstruction(state, DS, LC)) {
+        state = finishObjectConstruction(state, DS, LC);
         // We constructed the object directly in the variable.
         // No need to bind anything.
         B.generateNode(DS, UpdatedN, state);
       } else {
-        // We bound the temp obj region to the CXXConstructExpr. Now recover
-        // the lazy compound value when the variable is not a reference.
-        if (AMgr.getLangOpts().CPlusPlus && VD->getType()->isRecordType() &&
-            !VD->getType()->isReferenceType()) {
-          if (Optional<loc::MemRegionVal> M =
-                  InitVal.getAs<loc::MemRegionVal>()) {
-            InitVal = state->getSVal(M->getRegion());
-            assert(InitVal.getAs<nonloc::LazyCompoundVal>());
-          }
-        }
-
         // Recover some path-sensitivity if a scalar value evaluated to
         // UnknownVal.
         if (InitVal.isUnknown()) {
@@ -696,7 +684,7 @@ void ExprEngine::VisitLogicalExpr(const BinaryOperator* B, ExplodedNode *Pred,
       // known to be false, 1 if the value is known to be true and a new symbol
       // when the assumption is unknown.
       nonloc::ConcreteInt Zero(getBasicVals().getValue(0, B->getType()));
-      X = evalBinOp(N->getState(), BO_NE, 
+      X = evalBinOp(N->getState(), BO_NE,
                     svalBuilder.evalCast(RHSVal, B->getType(), RHS->getType()),
                     Zero, B->getType());
     }

@@ -16,10 +16,10 @@
 #define LLVM_CLANG_BASIC_OBJCRUNTIME_H
 
 #include "clang/Basic/LLVM.h"
-#include "clang/Basic/VersionTuple.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/VersionTuple.h"
 #include <string>
 
 namespace clang {
@@ -154,7 +154,7 @@ public:
     llvm_unreachable("bad kind");
   }
 
-  /// Does this runtime natively provide the ARC entrypoints? 
+  /// Does this runtime natively provide the ARC entrypoints?
   ///
   /// ARC cannot be directly supported on a platform that does not provide
   /// these entrypoints, although it may be supportable via a stub

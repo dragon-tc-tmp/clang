@@ -131,7 +131,7 @@ static bool startsNextParameter(const FormatToken &Current,
            Style.BreakConstructorInitializers !=
                FormatStyle::BCIS_BeforeComma) &&
           (Previous.isNot(TT_InheritanceComma) ||
-           !Style.BreakBeforeInheritanceComma));
+           Style.BreakInheritanceList != FormatStyle::BILS_BeforeComma));
 }
 
 static bool opensProtoMessageField(const FormatToken &LessTok,
@@ -321,6 +321,9 @@ bool ContinuationIndenter::canBreak(const LineState &State) {
       State.Stack.back().NoLineBreakInOperand)
     return false;
 
+  if (Previous.is(tok::l_square) && Previous.is(TT_ObjCMethodExpr))
+    return false;
+
   return !State.Stack.back().NoLineBreak;
 }
 
@@ -379,7 +382,8 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
   if (Current.is(TT_ObjCMethodExpr) && !Previous.is(TT_SelectorName) &&
       State.Line->startsWith(TT_ObjCMethodSpecifier))
     return true;
-  if (Current.is(TT_SelectorName) && State.Stack.back().ObjCSelectorNameFound &&
+  if (Current.is(TT_SelectorName) && !Previous.is(tok::at) &&
+      State.Stack.back().ObjCSelectorNameFound &&
       State.Stack.back().BreakBeforeParameter)
     return true;
 
@@ -576,7 +580,11 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
 
   // If "BreakBeforeInheritanceComma" mode, don't break within the inheritance
   // declaration unless there is multiple inheritance.
-  if (Style.BreakBeforeInheritanceComma && Current.is(TT_InheritanceColon))
+  if (Style.BreakInheritanceList == FormatStyle::BILS_BeforeComma &&
+      Current.is(TT_InheritanceColon))
+    State.Stack.back().NoLineBreak = true;
+  if (Style.BreakInheritanceList == FormatStyle::BILS_AfterColon &&
+      Previous.is(TT_InheritanceColon))
     State.Stack.back().NoLineBreak = true;
 
   if (Current.is(TT_SelectorName) &&
@@ -1019,6 +1027,9 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
   if (PreviousNonComment && PreviousNonComment->is(TT_CtorInitializerColon) &&
       Style.BreakConstructorInitializers == FormatStyle::BCIS_AfterColon)
     return State.Stack.back().Indent;
+  if (PreviousNonComment && PreviousNonComment->is(TT_InheritanceColon) &&
+      Style.BreakInheritanceList == FormatStyle::BILS_AfterColon)
+    return State.Stack.back().Indent;
   if (NextNonComment->isOneOf(TT_CtorInitializerColon, TT_InheritanceColon,
                               TT_InheritanceComma))
     return State.FirstIndent + Style.ConstructorInitializerIndentWidth;
@@ -1103,7 +1114,7 @@ unsigned ContinuationIndenter::moveStateToNextToken(LineState &State,
   }
   if (Current.is(TT_InheritanceColon))
     State.Stack.back().Indent =
-        State.FirstIndent + Style.ContinuationIndentWidth;
+        State.FirstIndent + Style.ConstructorInitializerIndentWidth;
   if (Current.isOneOf(TT_BinaryOperator, TT_ConditionalExpr) && Newline)
     State.Stack.back().NestedBlockIndent =
         State.Column + Current.ColumnWidth + 1;
@@ -1387,6 +1398,30 @@ void ContinuationIndenter::moveStatePastScopeCloser(LineState &State) {
        (Current.is(tok::greater) && Current.is(TT_DictLiteral))))
     State.Stack.pop_back();
 
+  // Reevaluate whether ObjC message arguments fit into one line.
+  // If a receiver spans multiple lines, e.g.:
+  //   [[object block:^{
+  //     return 42;
+  //   }] a:42 b:42];
+  // BreakBeforeParameter is calculated based on an incorrect assumption
+  // (it is checked whether the whole expression fits into one line without
+  // considering a line break inside a message receiver).
+  // We check whether arguements fit after receiver scope closer (into the same
+  // line).
+  if (State.Stack.back().BreakBeforeParameter && Current.MatchingParen &&
+      Current.MatchingParen->Previous) {
+    const FormatToken &CurrentScopeOpener = *Current.MatchingParen->Previous;
+    if (CurrentScopeOpener.is(TT_ObjCMethodExpr) &&
+        CurrentScopeOpener.MatchingParen) {
+      int NecessarySpaceInLine =
+          getLengthToMatchingParen(CurrentScopeOpener, State.Stack) +
+          CurrentScopeOpener.TotalLength - Current.TotalLength - 1;
+      if (State.Column + Current.ColumnWidth + NecessarySpaceInLine <=
+          Style.ColumnLimit)
+        State.Stack.back().BreakBeforeParameter = false;
+    }
+  }
+
   if (Current.is(tok::r_square)) {
     // If this ends the array subscript expr, reset the corresponding value.
     const FormatToken *NextNonComment = Current.getNextNonComment();
@@ -1640,7 +1675,7 @@ ContinuationIndenter::getRawStringStyle(const FormatToken &Current,
   if (!Delimiter)
     return None;
   auto RawStringStyle = RawStringFormats.getDelimiterStyle(*Delimiter);
-  if (!RawStringStyle)
+  if (!RawStringStyle && Delimiter->empty())
     RawStringStyle = RawStringFormats.getEnclosingFunctionStyle(
         getEnclosingFunctionName(Current));
   if (!RawStringStyle)
@@ -1774,6 +1809,7 @@ ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
   if (!DryRun)
     Token->adaptStartOfLine(0, Whitespaces);
 
+  unsigned ContentIndent = 0;
   unsigned Penalty = 0;
   LLVM_DEBUG(llvm::dbgs() << "Breaking protruding token at column "
                           << StartColumn << ".\n");
@@ -1895,11 +1931,28 @@ ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
         }
       }
       LLVM_DEBUG(llvm::dbgs() << "    Breaking...\n");
-      ContentStartColumn =
-          Token->getContentStartColumn(LineIndex, /*Break=*/true);
+      // Update the ContentIndent only if the current line was not reflown with
+      // the previous line, since in that case the previous line should still
+      // determine the ContentIndent. Also never intent the last line.
+      if (!Reflow)
+        ContentIndent = Token->getContentIndent(LineIndex);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    ContentIndent: " << ContentIndent << "\n");
+      ContentStartColumn = ContentIndent + Token->getContentStartColumn(
+                                               LineIndex, /*Break=*/true);
+
       unsigned NewRemainingTokenColumns = Token->getRemainingLength(
           LineIndex, TailOffset + Split.first + Split.second,
           ContentStartColumn);
+      if (NewRemainingTokenColumns == 0) {
+        // No content to indent.
+        ContentIndent = 0;
+        ContentStartColumn =
+            Token->getContentStartColumn(LineIndex, /*Break=*/true);
+        NewRemainingTokenColumns = Token->getRemainingLength(
+            LineIndex, TailOffset + Split.first + Split.second,
+            ContentStartColumn);
+      }
 
       // When breaking before a tab character, it may be moved by a few columns,
       // but will still be expanded to the next tab stop, so we don't save any
@@ -1913,7 +1966,8 @@ ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
       LLVM_DEBUG(llvm::dbgs() << "    Breaking at: " << TailOffset + Split.first
                               << ", " << Split.second << "\n");
       if (!DryRun)
-        Token->insertBreak(LineIndex, TailOffset, Split, Whitespaces);
+        Token->insertBreak(LineIndex, TailOffset, Split, ContentIndent,
+                           Whitespaces);
 
       Penalty += NewBreakPenalty;
       TailOffset += Split.first + Split.second;
