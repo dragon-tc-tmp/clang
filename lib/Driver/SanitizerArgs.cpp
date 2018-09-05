@@ -27,22 +27,22 @@ using namespace clang::driver;
 using namespace llvm::opt;
 
 enum : SanitizerMask {
-  NeedsUbsanRt = Undefined | Integer | ImplicitConversion | Nullability | CFI,
+  NeedsUbsanRt = Undefined | Integer | Nullability | CFI,
   NeedsUbsanCxxRt = Vptr | CFI,
   NotAllowedWithTrap = Vptr,
   NotAllowedWithMinimalRuntime = Vptr,
   RequiresPIE = DataFlow | HWAddress | Scudo,
   NeedsUnwindTables = Address | HWAddress | Thread | Memory | DataFlow,
   SupportsCoverage = Address | HWAddress | KernelAddress | KernelHWAddress |
-                     Memory | Leak | Undefined | Integer | ImplicitConversion |
-                     Nullability | DataFlow | Fuzzer | FuzzerNoLink,
-  RecoverableByDefault = Undefined | Integer | ImplicitConversion | Nullability,
+                     Memory | Leak | Undefined | Integer | Nullability |
+                     DataFlow | Fuzzer | FuzzerNoLink,
+  RecoverableByDefault = Undefined | Integer | Nullability,
   Unrecoverable = Unreachable | Return,
   AlwaysRecoverable = KernelAddress | KernelHWAddress,
   LegacyFsanitizeRecoverMask = Undefined | Integer,
   NeedsLTO = CFI,
   TrappingSupported = (Undefined & ~Vptr) | UnsignedIntegerOverflow |
-                      ImplicitConversion | Nullability | LocalBounds | CFI,
+                      Nullability | LocalBounds | CFI,
   TrappingDefault = CFI,
   CFIClasses =
       CFIVCall | CFINVCall | CFIMFCall | CFIDerivedCast | CFIUnrelatedCast,

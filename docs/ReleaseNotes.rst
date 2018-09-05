@@ -334,8 +334,6 @@ both writable and executable.
 
 ...
 
-.. _release-notes-ubsan:
-
 Undefined Behavior Sanitizer (UBSan)
 ------------------------------------
 

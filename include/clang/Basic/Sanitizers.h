@@ -84,8 +84,7 @@ SanitizerMask expandSanitizerGroups(SanitizerMask Kinds);
 /// Return the sanitizers which do not affect preprocessing.
 inline SanitizerMask getPPTransparentSanitizers() {
   return SanitizerKind::CFI | SanitizerKind::Integer |
-         SanitizerKind::ImplicitConversion | SanitizerKind::Nullability |
-         SanitizerKind::Undefined;
+         SanitizerKind::Nullability | SanitizerKind::Undefined;
 }
 
 } // namespace clang
