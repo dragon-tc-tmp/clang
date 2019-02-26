@@ -2577,7 +2577,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.Blocks = Args.hasArg(OPT_fblocks) || (Opts.OpenCL
     && Opts.OpenCLVersion == 200);
   Opts.BlocksRuntimeOptional = Args.hasArg(OPT_fblocks_runtime_optional);
-  Opts.CoroutinesTS = Args.hasArg(OPT_fcoroutines_ts);
+  Opts.Coroutines = Opts.CPlusPlus2a || Args.hasArg(OPT_fcoroutines_ts);
 
   // Enable [[]] attributes in C++11 by default.
   Opts.DoubleSquareBracketAttributes =
@@ -2662,6 +2662,8 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
   Opts.MaxTypeAlign = getLastArgIntValue(Args, OPT_fmax_type_align_EQ, 0, Diags);
   Opts.AlignDouble = Args.hasArg(OPT_malign_double);
   Opts.PICLevel = getLastArgIntValue(Args, OPT_pic_level, 0, Diags);
+  Opts.ROPI = Args.hasArg(OPT_fropi);
+  Opts.RWPI = Args.hasArg(OPT_frwpi);
   Opts.PIE = Args.hasArg(OPT_pic_is_pie);
   Opts.Static = Args.hasArg(OPT_static_define);
   Opts.DumpRecordLayoutsSimple = Args.hasArg(OPT_fdump_record_layouts_simple);
@@ -2838,6 +2840,9 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
     Opts.OpenMPCUDABlocksPerSM =
         getLastArgIntValue(Args, options::OPT_fopenmp_cuda_blocks_per_sm_EQ,
                            Opts.OpenMPCUDABlocksPerSM, Diags);
+    Opts.OpenMPCUDAReductionBufNum = getLastArgIntValue(
+        Args, options::OPT_fopenmp_cuda_teams_reduction_recs_num_EQ,
+        Opts.OpenMPCUDAReductionBufNum, Diags);
   }
 
   // Prevent auto-widening the representation of loop counters during an
@@ -2873,6 +2878,8 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
       Diags.Report(diag::err_drv_omp_host_ir_file_not_found)
           << Opts.OMPHostIRFile;
   }
+
+  Opts.SYCLIsDevice = Args.hasArg(options::OPT_fsycl_is_device);
 
   // Set CUDA mode for OpenMP target NVPTX if specified in options
   Opts.OpenMPCUDAMode = Opts.OpenMPIsDevice && T.isNVPTX() &&

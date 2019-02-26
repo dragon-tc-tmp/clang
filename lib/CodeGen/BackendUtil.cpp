@@ -581,7 +581,7 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
                            addObjCARCOptPass);
   }
 
-  if (LangOpts.CoroutinesTS)
+  if (LangOpts.Coroutines)
     addCoroutinePassesToExtensionPoints(PMBuilder);
 
   if (LangOpts.Sanitize.has(SanitizerKind::LocalBounds)) {
@@ -931,6 +931,14 @@ void addSanitizersAtO0(ModulePassManager &MPM, const Triple &TargetTriple,
     MPM.addPass(ModuleAddressSanitizerPass(
         /*CompileKernel=*/false, Recover, ModuleUseAfterScope,
         CodeGenOpts.SanitizeAddressUseOdrIndicator));
+  }
+
+  if (LangOpts.Sanitize.has(SanitizerKind::Memory)) {
+    MPM.addPass(createModuleToFunctionPassAdaptor(MemorySanitizerPass({})));
+  }
+
+  if (LangOpts.Sanitize.has(SanitizerKind::Thread)) {
+    MPM.addPass(createModuleToFunctionPassAdaptor(ThreadSanitizerPass()));
   }
 }
 

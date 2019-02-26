@@ -156,6 +156,7 @@ namespace clang {
   class OMPDeclareReductionDecl;
   class OMPDeclareSimdDecl;
   class OMPClause;
+  struct OMPVarListLocTy;
   struct OverloadCandidate;
   class OverloadCandidateSet;
   class OverloadExpr;
@@ -9350,15 +9351,13 @@ public:
 
   OMPClause *ActOnOpenMPVarListClause(
       OpenMPClauseKind Kind, ArrayRef<Expr *> Vars, Expr *TailExpr,
-      SourceLocation StartLoc, SourceLocation LParenLoc,
-      SourceLocation ColonLoc, SourceLocation EndLoc,
-      CXXScopeSpec &ReductionIdScopeSpec,
-      const DeclarationNameInfo &ReductionId, OpenMPDependClauseKind DepKind,
+      const OMPVarListLocTy &Locs, SourceLocation ColonLoc,
+      CXXScopeSpec &ReductionOrMapperIdScopeSpec,
+      DeclarationNameInfo &ReductionOrMapperId, OpenMPDependClauseKind DepKind,
       OpenMPLinearClauseKind LinKind,
       ArrayRef<OpenMPMapModifierKind> MapTypeModifiers,
-      ArrayRef<SourceLocation> MapTypeModifiersLoc,
-      OpenMPMapClauseKind MapType, bool IsMapTypeImplicit,
-      SourceLocation DepLinMapLoc);
+      ArrayRef<SourceLocation> MapTypeModifiersLoc, OpenMPMapClauseKind MapType,
+      bool IsMapTypeImplicit, SourceLocation DepLinMapLoc);
   /// Called on well-formed 'private' clause.
   OMPClause *ActOnOpenMPPrivateClause(ArrayRef<Expr *> VarList,
                                       SourceLocation StartLoc,
@@ -9442,10 +9441,12 @@ public:
   OMPClause *
   ActOnOpenMPMapClause(ArrayRef<OpenMPMapModifierKind> MapTypeModifiers,
                        ArrayRef<SourceLocation> MapTypeModifiersLoc,
+                       CXXScopeSpec &MapperIdScopeSpec,
+                       DeclarationNameInfo &MapperId,
                        OpenMPMapClauseKind MapType, bool IsMapTypeImplicit,
                        SourceLocation MapLoc, SourceLocation ColonLoc,
-                       ArrayRef<Expr *> VarList, SourceLocation StartLoc,
-                       SourceLocation LParenLoc, SourceLocation EndLoc);
+                       ArrayRef<Expr *> VarList, const OMPVarListLocTy &Locs,
+                       ArrayRef<Expr *> UnresolvedMappers = llvm::None);
   /// Called on well-formed 'num_teams' clause.
   OMPClause *ActOnOpenMPNumTeamsClause(Expr *NumTeams, SourceLocation StartLoc,
                                        SourceLocation LParenLoc,
@@ -9470,25 +9471,22 @@ public:
       SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation MLoc,
       SourceLocation KindLoc, SourceLocation EndLoc);
   /// Called on well-formed 'to' clause.
-  OMPClause *ActOnOpenMPToClause(ArrayRef<Expr *> VarList,
-                                 SourceLocation StartLoc,
-                                 SourceLocation LParenLoc,
-                                 SourceLocation EndLoc);
+  OMPClause *
+  ActOnOpenMPToClause(ArrayRef<Expr *> VarList, CXXScopeSpec &MapperIdScopeSpec,
+                      DeclarationNameInfo &MapperId,
+                      const OMPVarListLocTy &Locs,
+                      ArrayRef<Expr *> UnresolvedMappers = llvm::None);
   /// Called on well-formed 'from' clause.
-  OMPClause *ActOnOpenMPFromClause(ArrayRef<Expr *> VarList,
-                                   SourceLocation StartLoc,
-                                   SourceLocation LParenLoc,
-                                   SourceLocation EndLoc);
+  OMPClause *ActOnOpenMPFromClause(
+      ArrayRef<Expr *> VarList, CXXScopeSpec &MapperIdScopeSpec,
+      DeclarationNameInfo &MapperId, const OMPVarListLocTy &Locs,
+      ArrayRef<Expr *> UnresolvedMappers = llvm::None);
   /// Called on well-formed 'use_device_ptr' clause.
   OMPClause *ActOnOpenMPUseDevicePtrClause(ArrayRef<Expr *> VarList,
-                                           SourceLocation StartLoc,
-                                           SourceLocation LParenLoc,
-                                           SourceLocation EndLoc);
+                                           const OMPVarListLocTy &Locs);
   /// Called on well-formed 'is_device_ptr' clause.
   OMPClause *ActOnOpenMPIsDevicePtrClause(ArrayRef<Expr *> VarList,
-                                          SourceLocation StartLoc,
-                                          SourceLocation LParenLoc,
-                                          SourceLocation EndLoc);
+                                          const OMPVarListLocTy &Locs);
 
   /// The kind of conversion being performed.
   enum CheckedConversionKind {
@@ -10196,6 +10194,8 @@ public:
 
     DeviceDiagBuilder(Kind K, SourceLocation Loc, unsigned DiagID,
                       FunctionDecl *Fn, Sema &S);
+    DeviceDiagBuilder(DeviceDiagBuilder &&D);
+    DeviceDiagBuilder(const DeviceDiagBuilder &) = default;
     ~DeviceDiagBuilder();
 
     /// Convertible to bool: True if we immediately emitted an error, false if
@@ -10215,8 +10215,9 @@ public:
                                                const T &Value) {
       if (Diag.ImmediateDiag.hasValue())
         *Diag.ImmediateDiag << Value;
-      else if (Diag.PartialDiag.hasValue())
-        *Diag.PartialDiag << Value;
+      else if (Diag.PartialDiagId.hasValue())
+        Diag.S.DeviceDeferredDiags[Diag.Fn][*Diag.PartialDiagId].second
+            << Value;
       return Diag;
     }
 
@@ -10230,7 +10231,7 @@ public:
     // Invariant: At most one of these Optionals has a value.
     // FIXME: Switch these to a Variant once that exists.
     llvm::Optional<SemaDiagnosticBuilder> ImmediateDiag;
-    llvm::Optional<PartialDiagnostic> PartialDiag;
+    llvm::Optional<unsigned> PartialDiagId;
   };
 
   /// Indicate that this function (and thus everything it transtively calls)
@@ -10281,6 +10282,8 @@ public:
   ///    return ExprError();
   ///  // Otherwise, continue parsing as normal.
   DeviceDiagBuilder diagIfOpenMPDeviceCode(SourceLocation Loc, unsigned DiagID);
+
+  DeviceDiagBuilder targetDiag(SourceLocation Loc, unsigned DiagID);
 
   enum CUDAFunctionTarget {
     CFT_Device,

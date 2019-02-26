@@ -2901,8 +2901,8 @@ public:
     Expr *TailExpr = nullptr;
     SourceLocation ColonLoc;
     SourceLocation RLoc;
-    CXXScopeSpec ReductionIdScopeSpec;
-    DeclarationNameInfo ReductionId;
+    CXXScopeSpec ReductionOrMapperIdScopeSpec;
+    DeclarationNameInfo ReductionOrMapperId;
     OpenMPDependClauseKind DepKind = OMPC_DEPEND_unknown;
     OpenMPLinearClauseKind LinKind = OMPC_LINEAR_val;
     SmallVector<OpenMPMapModifierKind, OMPMapClause::NumberOfModifiers>
@@ -2925,6 +2925,12 @@ public:
                           ParsedType ObjectType,
                           SourceLocation *TemplateKWLoc,
                           UnqualifiedId &Result);
+  /// Parses the mapper modifier in map, to, and from clauses.
+  bool parseMapperModifier(OpenMPVarListDataTy &Data);
+  /// Parses map-type-modifiers in map clause.
+  /// map([ [map-type-modifier[,] [map-type-modifier[,] ...] map-type : ] list)
+  /// where, map-type-modifier ::= always | close | mapper(mapper-identifier)
+  bool parseMapTypeModifiers(OpenMPVarListDataTy &Data);
 
 private:
   //===--------------------------------------------------------------------===//
