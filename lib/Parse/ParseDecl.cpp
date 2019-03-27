@@ -1734,7 +1734,8 @@ Parser::DeclGroupPtrTy Parser::ParseDeclaration(DeclaratorContext Context,
 /// [C++11] attribute-specifier-seq decl-specifier-seq[opt]
 ///             init-declarator-list ';'
 ///[C90/C++]init-declarator-list ';'                             [TODO]
-/// [OMP]   threadprivate-directive                              [TODO]
+/// [OMP]   threadprivate-directive
+/// [OMP]   allocate-directive                                   [TODO]
 ///
 ///       for-range-declaration: [C++11 6.5p1: stmt.ranged]
 ///         attribute-specifier-seq[opt] type-specifier-seq declarator
@@ -2853,7 +2854,7 @@ Parser::DiagnoseMissingSemiAfterTagDefinition(DeclSpec &DS, AccessSpecifier AS,
       IdentifierInfo *Name = AfterScope.getIdentifierInfo();
       Sema::NameClassification Classification = Actions.ClassifyName(
           getCurScope(), SS, Name, AfterScope.getLocation(), Next,
-          /*IsAddressOfOperand*/false);
+          /*IsAddressOfOperand=*/false, /*CCC=*/nullptr);
       switch (Classification.getKind()) {
       case Sema::NC_Error:
         SkipMalformedDecl();
@@ -3823,6 +3824,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
         break;
       };
       LLVM_FALLTHROUGH;
+    case tok::kw_private:
     case tok::kw___private:
     case tok::kw___global:
     case tok::kw___local:
@@ -3887,6 +3889,9 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
 
 /// ParseStructDeclaration - Parse a struct declaration without the terminating
 /// semicolon.
+///
+/// Note that a struct declaration refers to a declaration in a struct,
+/// not to the declaration of a struct.
 ///
 ///       struct-declaration:
 /// [C2x]   attributes-specifier-seq[opt]
@@ -4786,6 +4791,7 @@ bool Parser::isTypeSpecifierQualifier() {
 
   case tok::kw___kindof:
 
+  case tok::kw_private:
   case tok::kw___private:
   case tok::kw___local:
   case tok::kw___global:
@@ -4976,6 +4982,7 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
 
   case tok::kw___kindof:
 
+  case tok::kw_private:
   case tok::kw___private:
   case tok::kw___local:
   case tok::kw___global:
@@ -5188,6 +5195,7 @@ void Parser::ParseTypeQualifierListOpt(
       break;
 
     // OpenCL qualifiers:
+    case tok::kw_private:
     case tok::kw___private:
     case tok::kw___global:
     case tok::kw___local:

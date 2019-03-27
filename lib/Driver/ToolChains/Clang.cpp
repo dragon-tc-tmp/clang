@@ -4547,6 +4547,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_fdiagnostics_parseable_fixits);
   Args.AddLastArg(CmdArgs, options::OPT_ftime_report);
   Args.AddLastArg(CmdArgs, options::OPT_ftrapv);
+  Args.AddLastArg(CmdArgs, options::OPT_malign_double);
 
   if (Arg *A = Args.getLastArg(options::OPT_ftrapv_handler_EQ)) {
     CmdArgs.push_back("-ftrapv-handler");
@@ -5032,8 +5033,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_fno_apple_pragma_pack, false))
     CmdArgs.push_back("-fapple-pragma-pack");
 
+  // Remarks can be enabled with any of the `-f.*optimization-record.*` flags.
   if (Args.hasFlag(options::OPT_fsave_optimization_record,
                    options::OPT_foptimization_record_file_EQ,
+                   options::OPT_fno_save_optimization_record, false) ||
+      Args.hasFlag(options::OPT_foptimization_record_passes_EQ,
                    options::OPT_fno_save_optimization_record, false)) {
     CmdArgs.push_back("-opt-record-file");
 
@@ -5067,6 +5071,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
       llvm::sys::path::replace_extension(F, "opt.yaml");
       CmdArgs.push_back(Args.MakeArgString(F));
+    }
+    if (const Arg *A =
+            Args.getLastArg(options::OPT_foptimization_record_passes_EQ)) {
+      CmdArgs.push_back("-opt-record-passes");
+      CmdArgs.push_back(A->getValue());
     }
   }
 
@@ -5922,6 +5931,15 @@ void ClangAs::AddX86TargetArgs(const ArgList &Args,
   }
 }
 
+void ClangAs::AddRISCVTargetArgs(const ArgList &Args,
+                               ArgStringList &CmdArgs) const {
+  const llvm::Triple &Triple = getToolChain().getTriple();
+  StringRef ABIName = riscv::getRISCVABI(Args, Triple);
+
+  CmdArgs.push_back("-target-abi");
+  CmdArgs.push_back(ABIName.data());
+}
+
 void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
                            const InputInfo &Output, const InputInfoList &Inputs,
                            const ArgList &Args,
@@ -6090,6 +6108,11 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-mllvm");
         CmdArgs.push_back("-arm-add-build-attributes");
     }
+    break;
+
+  case llvm::Triple::riscv32:
+  case llvm::Triple::riscv64:
+    AddRISCVTargetArgs(Args, CmdArgs);
     break;
   }
 

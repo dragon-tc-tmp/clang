@@ -319,19 +319,6 @@ static void addDataFlowSanitizerPass(const PassManagerBuilder &Builder,
   PM.add(createDataFlowSanitizerPass(LangOpts.SanitizerBlacklistFiles));
 }
 
-static void addEfficiencySanitizerPass(const PassManagerBuilder &Builder,
-                                       legacy::PassManagerBase &PM) {
-  const PassManagerBuilderWrapper &BuilderWrapper =
-      static_cast<const PassManagerBuilderWrapper&>(Builder);
-  const LangOptions &LangOpts = BuilderWrapper.getLangOpts();
-  EfficiencySanitizerOptions Opts;
-  if (LangOpts.Sanitize.has(SanitizerKind::EfficiencyCacheFrag))
-    Opts.ToolType = EfficiencySanitizerOptions::ESAN_CacheFrag;
-  else if (LangOpts.Sanitize.has(SanitizerKind::EfficiencyWorkingSet))
-    Opts.ToolType = EfficiencySanitizerOptions::ESAN_WorkingSet;
-  PM.add(createEfficiencySanitizerPass(Opts));
-}
-
 static TargetLibraryInfoImpl *createTLII(llvm::Triple &TargetTriple,
                                          const CodeGenOptions &CodeGenOpts) {
   TargetLibraryInfoImpl *TLII = new TargetLibraryInfoImpl(TargetTriple);
@@ -654,13 +641,6 @@ void EmitAssemblyHelper::CreatePasses(legacy::PassManager &MPM,
                            addDataFlowSanitizerPass);
     PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
                            addDataFlowSanitizerPass);
-  }
-
-  if (LangOpts.Sanitize.hasOneOf(SanitizerKind::Efficiency)) {
-    PMBuilder.addExtension(PassManagerBuilder::EP_OptimizerLast,
-                           addEfficiencySanitizerPass);
-    PMBuilder.addExtension(PassManagerBuilder::EP_EnabledOnOptLevel0,
-                           addEfficiencySanitizerPass);
   }
 
   // Set up the per-function pass manager.
@@ -1360,6 +1340,7 @@ static void runThinLTOBackend(ModuleSummaryIndex *CombinedIndex, Module *M,
   Conf.DebugPassManager = CGOpts.DebugPassManager;
   Conf.RemarksWithHotness = CGOpts.DiagnosticsWithHotness;
   Conf.RemarksFilename = CGOpts.OptRecordFile;
+  Conf.RemarksPasses = CGOpts.OptRecordPasses;
   Conf.DwoPath = CGOpts.SplitDwarfFile;
   switch (Action) {
   case Backend_EmitNothing:
@@ -1466,6 +1447,9 @@ static const char* getSectionNameForBitcode(const Triple &T) {
   case Triple::Wasm:
   case Triple::UnknownObjectFormat:
     return ".llvmbc";
+  case Triple::XCOFF:
+    llvm_unreachable("XCOFF is not yet implemented");
+    break;
   }
   llvm_unreachable("Unimplemented ObjectFormatType");
 }
@@ -1479,6 +1463,9 @@ static const char* getSectionNameForCommandline(const Triple &T) {
   case Triple::Wasm:
   case Triple::UnknownObjectFormat:
     return ".llvmcmd";
+  case Triple::XCOFF:
+    llvm_unreachable("XCOFF is not yet implemented");
+    break;
   }
   llvm_unreachable("Unimplemented ObjectFormatType");
 }

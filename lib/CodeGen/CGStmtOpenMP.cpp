@@ -1529,8 +1529,9 @@ void CodeGenFunction::EmitOMPPrivateLoopCounters(
          I < E; ++I) {
       const auto *DRE = cast<DeclRefExpr>(C->getLoopCounter(I));
       const auto *VD = cast<VarDecl>(DRE->getDecl());
-      // Override only those variables that are really emitted already.
-      if (LocalDeclMap.count(VD)) {
+      // Override only those variables that can be captured to avoid re-emission
+      // of the variables declared within the loops.
+      if (DRE->refersToEnclosingVariableOrCapture()) {
         (void)LoopScope.addPrivate(VD, [this, DRE, VD]() {
           return CreateMemTemp(DRE->getType(), VD->getName());
         });
@@ -3948,6 +3949,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_in_reduction:
   case OMPC_safelen:
   case OMPC_simdlen:
+  case OMPC_allocator:
   case OMPC_collapse:
   case OMPC_default:
   case OMPC_seq_cst:
@@ -3963,6 +3965,7 @@ static void emitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_nowait:
   case OMPC_untied:
   case OMPC_threadprivate:
+  case OMPC_allocate:
   case OMPC_depend:
   case OMPC_mergeable:
   case OMPC_device:

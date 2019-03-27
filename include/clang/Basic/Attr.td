@@ -1560,17 +1560,12 @@ def ReturnsNonNull : InheritableAttr {
 // pass_object_size(N) indicates that the parameter should have
 // __builtin_object_size with Type=N evaluated on the parameter at the callsite.
 def PassObjectSize : InheritableParamAttr {
-  let Spellings = [Clang<"pass_object_size">];
+  let Spellings = [Clang<"pass_object_size">,
+                   Clang<"pass_dynamic_object_size">];
+  let Accessors = [Accessor<"isDynamic", [Clang<"pass_dynamic_object_size">]>];
   let Args = [IntArgument<"Type">];
   let Subjects = SubjectList<[ParmVar]>;
   let Documentation = [PassObjectSizeDocs];
-}
-
-def FortifyStdLib : InheritableAttr {
-  let Spellings = [Clang<"fortify_stdlib">];
-  let Args = [IntArgument<"Type">, IntArgument<"Flag">];
-  let Subjects = SubjectList<[Function]>;
-  let Documentation = [FortifyStdLibDocs];
 }
 
 // Nullability type attributes.
@@ -2762,6 +2757,12 @@ def : IgnoredAttr {
   let Spellings = [Declspec<"property">];
 }
 
+def MSAllocator : InheritableAttr {
+  let Spellings = [Declspec<"allocator">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [MSAllocatorDocs];
+}
+
 def MSStruct : InheritableAttr {
   let Spellings = [GCC<"ms_struct">];
   let Subjects = SubjectList<[Record]>;
@@ -3150,6 +3151,29 @@ def OMPDeclareTargetDecl : InheritableAttr {
       return llvm::None;
     }
   }];
+}
+
+def OMPAllocateDecl : InheritableAttr {
+  // This attribute has no spellings as it is only ever created implicitly.
+  let Spellings = [];
+  let SemaHandler = 0;
+  let Args = [
+    EnumArgument<"AllocatorType", "AllocatorTypeTy",
+                 [
+                   "omp_default_mem_alloc", "omp_large_cap_mem_alloc",
+                   "omp_const_mem_alloc", "omp_high_bw_mem_alloc",
+                   "omp_low_lat_mem_alloc", "omp_cgroup_mem_alloc",
+                   "omp_pteam_mem_alloc", "omp_thread_mem_alloc", ""
+                 ],
+                 [
+                   "OMPDefaultMemAlloc", "OMPLargeCapMemAlloc",
+                   "OMPConstMemAlloc", "OMPHighBWMemAlloc", "OMPLowLatMemAlloc",
+                   "OMPCGroupMemAlloc", "OMPPTeamMemAlloc", "OMPThreadMemAlloc",
+                   "OMPUserDefinedMemAlloc"
+                 ]>,
+    ExprArgument<"Allocator">
+  ];
+  let Documentation = [Undocumented];
 }
 
 def InternalLinkage : InheritableAttr {
