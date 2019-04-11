@@ -715,6 +715,22 @@ struct FormatStyle {
   ///       AfterClass: true
   /// \endcode
   struct BraceWrappingFlags {
+    /// Wrap case labels.
+    /// \code
+    ///   false:                                true:
+    ///   switch (foo) {                vs.     switch (foo) {
+    ///     case 1: {                             case 1:
+    ///       bar();                              {
+    ///       break;                                bar();
+    ///     }                                       break;
+    ///     default: {                            }
+    ///       plop();                             default:
+    ///     }                                     {
+    ///   }                                         plop();
+    ///                                           }
+    ///                                         }
+    /// \endcode
+    bool AfterCaseLabel;
     /// Wrap class definitions.
     /// \code
     ///   true:
@@ -1628,6 +1644,13 @@ struct FormatStyle {
   /// \endcode
   bool SpaceAfterCStyleCast;
 
+  /// If ``true``, a space is inserted after the logical not operator (``!``).
+  /// \code
+  ///    true:                                  false:
+  ///    ! someExpression();            vs.     !someExpression();
+  /// \endcode
+  bool SpaceAfterLogicalNot;
+
   /// If \c true, a space will be inserted after the 'template' keyword.
   /// \code
   ///    true:                                  false:
@@ -1690,6 +1713,17 @@ struct FormatStyle {
     ///    }
     /// \endcode
     SBPO_ControlStatements,
+    /// Put a space before opening parentheses only if the parentheses are not
+    /// empty i.e. '()'
+    /// \code
+    ///   void() {
+    ///     if (true) {
+    ///       f();
+    ///       g (x, y, z);
+    ///     }
+    ///   }
+    /// \endcode
+    SBPO_NonEmptyParentheses,
     /// Always put a space before opening parentheses, except when it's
     /// prohibited by the syntax rules (in function-like macro definitions) or
     /// when determined by other style rules (after unary operators, opening
@@ -1900,6 +1934,7 @@ struct FormatStyle {
            PointerAlignment == R.PointerAlignment &&
            RawStringFormats == R.RawStringFormats &&
            SpaceAfterCStyleCast == R.SpaceAfterCStyleCast &&
+           SpaceAfterLogicalNot == R.SpaceAfterLogicalNot &&
            SpaceAfterTemplateKeyword == R.SpaceAfterTemplateKeyword &&
            SpaceBeforeAssignmentOperators == R.SpaceBeforeAssignmentOperators &&
            SpaceBeforeCpp11BracedList == R.SpaceBeforeCpp11BracedList &&

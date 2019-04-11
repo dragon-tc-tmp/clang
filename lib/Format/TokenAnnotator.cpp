@@ -2095,7 +2095,7 @@ static bool isFunctionDeclarationName(const FormatToken &Current,
     return true;
   for (const FormatToken *Tok = Next->Next; Tok && Tok != Next->MatchingParen;
        Tok = Tok->Next) {
-    if (Tok->is(tok::l_paren) && Tok->MatchingParen) {
+    if (Tok->isOneOf(tok::l_paren, TT_TemplateOpener) && Tok->MatchingParen) {
       Tok = Tok->MatchingParen;
       continue;
     }
@@ -2453,6 +2453,12 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   return 3;
 }
 
+bool TokenAnnotator::spaceRequiredBeforeParens(const FormatToken &Right) const {
+  return Style.SpaceBeforeParens == FormatStyle::SBPO_Always ||
+         (Style.SpaceBeforeParens == FormatStyle::SBPO_NonEmptyParentheses &&
+          Right.ParameterCount > 0);
+}
+
 bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
                                           const FormatToken &Left,
                                           const FormatToken &Right) {
@@ -2599,9 +2605,9 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
              (Left.isOneOf(tok::kw_try, Keywords.kw___except, tok::kw_catch,
                            tok::kw_new, tok::kw_delete) &&
               (!Left.Previous || Left.Previous->isNot(tok::period))))) ||
-           (Style.SpaceBeforeParens == FormatStyle::SBPO_Always &&
+           (spaceRequiredBeforeParens(Right) &&
             (Left.is(tok::identifier) || Left.isFunctionLikeKeyword() ||
-             Left.is(tok::r_paren) ||
+             Left.is(tok::r_paren) || Left.isSimpleTypeSpecifier() ||
              (Left.is(tok::r_square) && Left.MatchingParen &&
               Left.MatchingParen->is(TT_LambdaLSquare))) &&
             Line.Type != LT_PreprocessorDirective);
@@ -2795,7 +2801,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       Left.isOneOf(TT_TrailingReturnArrow, TT_LambdaArrow))
     return true;
   if (Right.is(TT_OverloadedOperatorLParen))
-    return Style.SpaceBeforeParens == FormatStyle::SBPO_Always;
+    return spaceRequiredBeforeParens(Right);
   if (Left.is(tok::comma))
     return true;
   if (Right.is(tok::comma))
@@ -2826,7 +2832,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return true;
   }
   if (Left.is(TT_UnaryOperator))
-    return Right.is(TT_BinaryOperator);
+    return (Style.SpaceAfterLogicalNot && Left.is(tok::exclaim)) ||
+           Right.is(TT_BinaryOperator);
 
   // If the next token is a binary operator or a selector name, we have
   // incorrectly classified the parenthesis as a cast. FIXME: Detect correctly.
@@ -2879,7 +2886,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
     return true;
   if (Left.is(TT_TemplateCloser) && Right.is(tok::l_paren) &&
       Right.isNot(TT_FunctionTypeLParen))
-    return Style.SpaceBeforeParens == FormatStyle::SBPO_Always;
+    return spaceRequiredBeforeParens(Right);
   if (Right.is(TT_TemplateOpener) && Left.is(tok::r_paren) &&
       Left.MatchingParen && Left.MatchingParen->is(TT_OverloadedOperatorLParen))
     return false;

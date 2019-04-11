@@ -2503,16 +2503,13 @@ public:
 
   void EmitCXXConstructorCall(const CXXConstructorDecl *D, CXXCtorType Type,
                               bool ForVirtualBase, bool Delegating,
-                              Address This, const CXXConstructExpr *E,
-                              AggValueSlot::Overlap_t Overlap,
-                              bool NewPointerIsChecked);
+                              AggValueSlot ThisAVS, const CXXConstructExpr *E);
 
   void EmitCXXConstructorCall(const CXXConstructorDecl *D, CXXCtorType Type,
                               bool ForVirtualBase, bool Delegating,
                               Address This, CallArgList &Args,
                               AggValueSlot::Overlap_t Overlap,
-                              SourceLocation Loc,
-                              bool NewPointerIsChecked);
+                              SourceLocation Loc, bool NewPointerIsChecked);
 
   /// Emit assumption load for all bases. Requires to be be called only on
   /// most-derived class and not under construction of the object.
@@ -3727,9 +3724,6 @@ public:
                                          SmallVectorImpl<llvm::Value *> &Ops,
                                          Address PtrOp0, Address PtrOp1,
                                          llvm::Triple::ArchType Arch);
-
-  llvm::Value *EmitISOVolatileLoad(const CallExpr *E);
-  llvm::Value *EmitISOVolatileStore(const CallExpr *E);
 
   llvm::Function *LookupNeonLLVMIntrinsic(unsigned IntrinsicID,
                                           unsigned Modifier, llvm::Type *ArgTy,

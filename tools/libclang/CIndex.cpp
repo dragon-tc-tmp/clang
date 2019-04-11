@@ -2263,6 +2263,10 @@ void OMPClauseEnqueue::VisitOMPClauseList(T *Node) {
   }
 }
 
+void OMPClauseEnqueue::VisitOMPAllocateClause(const OMPAllocateClause *C) {
+  VisitOMPClauseList(C);
+  Visitor->AddStmt(C->getAllocator());
+}
 void OMPClauseEnqueue::VisitOMPPrivateClause(const OMPPrivateClause *C) {
   VisitOMPClauseList(C);
   for (const auto *E : C->private_copies()) {
@@ -4224,7 +4228,7 @@ const char *clang_getFileContents(CXTranslationUnit TU, CXFile file,
   const SourceManager &SM = cxtu::getASTUnit(TU)->getSourceManager();
   FileID fid = SM.translateFile(static_cast<FileEntry *>(file));
   bool Invalid = true;
-  llvm::MemoryBuffer *buf = SM.getBuffer(fid, &Invalid);
+  const llvm::MemoryBuffer *buf = SM.getBuffer(fid, &Invalid);
   if (Invalid) {
     if (size)
       *size = 0;

@@ -1809,8 +1809,7 @@ void CodeGenModule::ConstructDefaultFnAttrList(StringRef Name, bool HasOptnone,
 
 void CodeGenModule::AddDefaultFnAttrs(llvm::Function &F) {
   llvm::AttrBuilder FuncAttrs;
-  ConstructDefaultFnAttrList(F.getName(),
-                             F.hasFnAttribute(llvm::Attribute::OptimizeNone),
+  ConstructDefaultFnAttrList(F.getName(), F.hasOptNone(),
                              /* AttrOnCallsite = */ false, FuncAttrs);
   F.addAttributes(llvm::AttributeList::FunctionIndex, FuncAttrs);
 }
@@ -2873,15 +2872,6 @@ void CodeGenFunction::EmitFunctionEpilog(const CGFunctionInfo &FI,
         // Get the stored value and nuke the now-dead store.
         RV = SI->getValueOperand();
         SI->eraseFromParent();
-
-        // If that was the only use of the return value, nuke it as well now.
-        auto returnValueInst = ReturnValue.getPointer();
-        if (returnValueInst->use_empty()) {
-          if (auto alloca = dyn_cast<llvm::AllocaInst>(returnValueInst)) {
-            alloca->eraseFromParent();
-            ReturnValue = Address::invalid();
-          }
-        }
 
       // Otherwise, we have to do a simple load.
       } else {

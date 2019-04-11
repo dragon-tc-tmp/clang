@@ -298,6 +298,34 @@ static Value *EmitAtomicDecrementValue(CodeGenFunction &CGF, const CallExpr *E,
   return CGF.Builder.CreateSub(Result, ConstantInt::get(IntTy, 1));
 }
 
+// Build a plain volatile load.
+static Value *EmitISOVolatileLoad(CodeGenFunction &CGF, const CallExpr *E) {
+  Value *Ptr = CGF.EmitScalarExpr(E->getArg(0));
+  QualType ElTy = E->getArg(0)->getType()->getPointeeType();
+  CharUnits LoadSize = CGF.getContext().getTypeSizeInChars(ElTy);
+  llvm::Type *ITy =
+      llvm::IntegerType::get(CGF.getLLVMContext(), LoadSize.getQuantity() * 8);
+  Ptr = CGF.Builder.CreateBitCast(Ptr, ITy->getPointerTo());
+  llvm::LoadInst *Load = CGF.Builder.CreateAlignedLoad(Ptr, LoadSize);
+  Load->setVolatile(true);
+  return Load;
+}
+
+// Build a plain volatile store.
+static Value *EmitISOVolatileStore(CodeGenFunction &CGF, const CallExpr *E) {
+  Value *Ptr = CGF.EmitScalarExpr(E->getArg(0));
+  Value *Value = CGF.EmitScalarExpr(E->getArg(1));
+  QualType ElTy = E->getArg(0)->getType()->getPointeeType();
+  CharUnits StoreSize = CGF.getContext().getTypeSizeInChars(ElTy);
+  llvm::Type *ITy =
+      llvm::IntegerType::get(CGF.getLLVMContext(), StoreSize.getQuantity() * 8);
+  Ptr = CGF.Builder.CreateBitCast(Ptr, ITy->getPointerTo());
+  llvm::StoreInst *Store =
+      CGF.Builder.CreateAlignedStore(Value, Ptr, StoreSize);
+  Store->setVolatile(true);
+  return Store;
+}
+
 // Emit a simple mangled intrinsic that has 1 argument and a return type
 // matching the argument type.
 static Value *emitUnaryBuiltin(CodeGenFunction &CGF,
@@ -1110,6 +1138,7 @@ llvm::Function *CodeGenFunction::generateBuiltinOSLogHelperFunction(
   Fn->setVisibility(llvm::GlobalValue::HiddenVisibility);
   CGM.SetLLVMFunctionAttributes(GlobalDecl(), FI, Fn);
   CGM.SetLLVMFunctionAttributesForDefinition(nullptr, Fn);
+  Fn->setDoesNotThrow();
 
   // Attach 'noinline' at -Oz.
   if (CGM.getCodeGenOpts().OptimizeSize == 2)
@@ -3341,6 +3370,19 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
   case Builtin::BI_interlockedbittestandreset_nf:
     return RValue::get(EmitBitTestIntrinsic(*this, BuiltinID, E));
 
+    // These builtins exist to emit regular volatile loads and stores not
+    // affected by the -fms-volatile setting.
+  case Builtin::BI__iso_volatile_load8:
+  case Builtin::BI__iso_volatile_load16:
+  case Builtin::BI__iso_volatile_load32:
+  case Builtin::BI__iso_volatile_load64:
+    return RValue::get(EmitISOVolatileLoad(*this, E));
+  case Builtin::BI__iso_volatile_store8:
+  case Builtin::BI__iso_volatile_store16:
+  case Builtin::BI__iso_volatile_store32:
+  case Builtin::BI__iso_volatile_store64:
+    return RValue::get(EmitISOVolatileStore(*this, E));
+
   case Builtin::BI__exception_code:
   case Builtin::BI_exception_code:
     return RValue::get(EmitSEHExceptionCode());
@@ -3696,21 +3738,35 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
     // Any calls now have event arguments passed.
     if (NumArgs >= 7) {
       llvm::Type *EventTy = ConvertType(getContext().OCLClkEventTy);
-      llvm::Type *EventPtrTy = EventTy->getPointerTo(
+      llvm::PointerType *EventPtrTy = EventTy->getPointerTo(
           CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic));
 
       llvm::Value *NumEvents =
           Builder.CreateZExtOrTrunc(EmitScalarExpr(E->getArg(3)), Int32Ty);
-      llvm::Value *EventList =
-          E->getArg(4)->getType()->isArrayType()
-              ? EmitArrayToPointerDecay(E->getArg(4)).getPointer()
-              : EmitScalarExpr(E->getArg(4));
-      llvm::Value *ClkEvent = EmitScalarExpr(E->getArg(5));
-      // Convert to generic address space.
-      EventList = Builder.CreatePointerCast(EventList, EventPtrTy);
-      ClkEvent = ClkEvent->getType()->isIntegerTy()
-                   ? Builder.CreateBitOrPointerCast(ClkEvent, EventPtrTy)
-                   : Builder.CreatePointerCast(ClkEvent, EventPtrTy);
+
+      // Since SemaOpenCLBuiltinEnqueueKernel allows fifth and sixth arguments
+      // to be a null pointer constant (including `0` literal), we can take it
+      // into account and emit null pointer directly.
+      llvm::Value *EventWaitList = nullptr;
+      if (E->getArg(4)->isNullPointerConstant(
+              getContext(), Expr::NPC_ValueDependentIsNotNull)) {
+        EventWaitList = llvm::ConstantPointerNull::get(EventPtrTy);
+      } else {
+        EventWaitList = E->getArg(4)->getType()->isArrayType()
+                        ? EmitArrayToPointerDecay(E->getArg(4)).getPointer()
+                        : EmitScalarExpr(E->getArg(4));
+        // Convert to generic address space.
+        EventWaitList = Builder.CreatePointerCast(EventWaitList, EventPtrTy);
+      }
+      llvm::Value *EventRet = nullptr;
+      if (E->getArg(5)->isNullPointerConstant(
+              getContext(), Expr::NPC_ValueDependentIsNotNull)) {
+        EventRet = llvm::ConstantPointerNull::get(EventPtrTy);
+      } else {
+        EventRet =
+            Builder.CreatePointerCast(EmitScalarExpr(E->getArg(5)), EventPtrTy);
+      }
+
       auto Info =
           CGM.getOpenCLRuntime().emitOpenCLEnqueuedBlock(*this, E->getArg(6));
       llvm::Value *Kernel =
@@ -3722,8 +3778,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
           QueueTy,    Int32Ty,    RangeTy,          Int32Ty,
           EventPtrTy, EventPtrTy, GenericVoidPtrTy, GenericVoidPtrTy};
 
-      std::vector<llvm::Value *> Args = {Queue,     Flags,    Range,  NumEvents,
-                                         EventList, ClkEvent, Kernel, Block};
+      std::vector<llvm::Value *> Args = {Queue,     Flags,         Range,
+                                         NumEvents, EventWaitList, EventRet,
+                                         Kernel,    Block};
 
       if (NumArgs == 7) {
         // Has events but no variadics.
@@ -5835,34 +5892,6 @@ static bool HasExtraNeonArgument(unsigned BuiltinID) {
   return true;
 }
 
-Value *CodeGenFunction::EmitISOVolatileLoad(const CallExpr *E) {
-  Value *Ptr = EmitScalarExpr(E->getArg(0));
-  QualType ElTy = E->getArg(0)->getType()->getPointeeType();
-  CharUnits LoadSize = getContext().getTypeSizeInChars(ElTy);
-  llvm::Type *ITy = llvm::IntegerType::get(getLLVMContext(),
-                                           LoadSize.getQuantity() * 8);
-  Ptr = Builder.CreateBitCast(Ptr, ITy->getPointerTo());
-  llvm::LoadInst *Load =
-    Builder.CreateAlignedLoad(Ptr, LoadSize);
-  Load->setVolatile(true);
-  return Load;
-}
-
-Value *CodeGenFunction::EmitISOVolatileStore(const CallExpr *E) {
-  Value *Ptr = EmitScalarExpr(E->getArg(0));
-  Value *Value = EmitScalarExpr(E->getArg(1));
-  QualType ElTy = E->getArg(0)->getType()->getPointeeType();
-  CharUnits StoreSize = getContext().getTypeSizeInChars(ElTy);
-  llvm::Type *ITy = llvm::IntegerType::get(getLLVMContext(),
-                                           StoreSize.getQuantity() * 8);
-  Ptr = Builder.CreateBitCast(Ptr, ITy->getPointerTo());
-  llvm::StoreInst *Store =
-    Builder.CreateAlignedStore(Value, Ptr,
-                               StoreSize);
-  Store->setVolatile(true);
-  return Store;
-}
-
 Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
                                            const CallExpr *E,
                                            llvm::Triple::ArchType Arch) {
@@ -6100,19 +6129,6 @@ Value *CodeGenFunction::EmitARMBuiltinExpr(unsigned BuiltinID,
                                        : Intrinsic::arm_strex,
                                    StoreAddr->getType());
     return Builder.CreateCall(F, {StoreVal, StoreAddr}, "strex");
-  }
-
-  switch (BuiltinID) {
-  case ARM::BI__iso_volatile_load8:
-  case ARM::BI__iso_volatile_load16:
-  case ARM::BI__iso_volatile_load32:
-  case ARM::BI__iso_volatile_load64:
-    return EmitISOVolatileLoad(E);
-  case ARM::BI__iso_volatile_store8:
-  case ARM::BI__iso_volatile_store16:
-  case ARM::BI__iso_volatile_store32:
-  case ARM::BI__iso_volatile_store64:
-    return EmitISOVolatileStore(E);
   }
 
   if (BuiltinID == ARM::BI__builtin_arm_clrex) {
@@ -8926,16 +8942,6 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
     Int = Intrinsic::aarch64_neon_suqadd;
     return EmitNeonCall(CGM.getIntrinsic(Int, Ty), Ops, "vuqadd");
   }
-  case AArch64::BI__iso_volatile_load8:
-  case AArch64::BI__iso_volatile_load16:
-  case AArch64::BI__iso_volatile_load32:
-  case AArch64::BI__iso_volatile_load64:
-    return EmitISOVolatileLoad(E);
-  case AArch64::BI__iso_volatile_store8:
-  case AArch64::BI__iso_volatile_store16:
-  case AArch64::BI__iso_volatile_store32:
-  case AArch64::BI__iso_volatile_store64:
-    return EmitISOVolatileStore(E);
   case AArch64::BI_BitScanForward:
   case AArch64::BI_BitScanForward64:
     return EmitMSVCBuiltinExpr(MSVCIntrin::_BitScanForward, E);
