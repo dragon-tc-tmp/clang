@@ -849,25 +849,67 @@ void Sema::ActOnStartOfTranslationUnit() {
   if (getLangOpts().ModulesTS &&
       (getLangOpts().getCompilingModule() == LangOptions::CMK_ModuleInterface ||
        getLangOpts().getCompilingModule() == LangOptions::CMK_None)) {
+    // We start in an implied global module fragment.
     SourceLocation StartOfTU =
         SourceMgr.getLocForStartOfFile(SourceMgr.getMainFileID());
-
-    // We start in the global module; all those declarations are implicitly
-    // module-private (though they do not have module linkage).
-    auto &Map = PP.getHeaderSearchInfo().getModuleMap();
-    auto *GlobalModule = Map.createGlobalModuleForInterfaceUnit(StartOfTU);
-    assert(GlobalModule && "module creation should not fail");
-
-    // Enter the scope of the global module.
-    ModuleScopes.push_back({});
-    ModuleScopes.back().Module = GlobalModule;
-    VisibleModules.setVisible(GlobalModule, StartOfTU);
-
-    // All declarations created from now on are owned by the global module.
-    auto *TU = Context.getTranslationUnitDecl();
-    TU->setModuleOwnershipKind(Decl::ModuleOwnershipKind::Visible);
-    TU->setLocalOwningModule(GlobalModule);
+    ActOnGlobalModuleFragmentDecl(StartOfTU);
+    ModuleScopes.back().ImplicitGlobalModuleFragment = true;
   }
+}
+
+void Sema::ActOnEndOfTranslationUnitFragment(TUFragmentKind Kind) {
+  // No explicit actions are required at the end of the global module fragment.
+  if (Kind == TUFragmentKind::Global)
+    return;
+
+  // Transfer late parsed template instantiations over to the pending template
+  // instantiation list. During normal compilation, the late template parser
+  // will be installed and instantiating these templates will succeed.
+  //
+  // If we are building a TU prefix for serialization, it is also safe to
+  // transfer these over, even though they are not parsed. The end of the TU
+  // should be outside of any eager template instantiation scope, so when this
+  // AST is deserialized, these templates will not be parsed until the end of
+  // the combined TU.
+  PendingInstantiations.insert(PendingInstantiations.end(),
+                               LateParsedInstantiations.begin(),
+                               LateParsedInstantiations.end());
+  LateParsedInstantiations.clear();
+
+  // If DefinedUsedVTables ends up marking any virtual member functions it
+  // might lead to more pending template instantiations, which we then need
+  // to instantiate.
+  DefineUsedVTables();
+
+  // C++: Perform implicit template instantiations.
+  //
+  // FIXME: When we perform these implicit instantiations, we do not
+  // carefully keep track of the point of instantiation (C++ [temp.point]).
+  // This means that name lookup that occurs within the template
+  // instantiation will always happen at the end of the translation unit,
+  // so it will find some names that are not required to be found. This is
+  // valid, but we could do better by diagnosing if an instantiation uses a
+  // name that was not visible at its first point of instantiation.
+  if (ExternalSource) {
+    // Load pending instantiations from the external source.
+    SmallVector<PendingImplicitInstantiation, 4> Pending;
+    ExternalSource->ReadPendingInstantiations(Pending);
+    for (auto PII : Pending)
+      if (auto Func = dyn_cast<FunctionDecl>(PII.first))
+        Func->setInstantiationIsPending(true);
+    PendingInstantiations.insert(PendingInstantiations.begin(),
+                                 Pending.begin(), Pending.end());
+  }
+
+  {
+    llvm::TimeTraceScope TimeScope("PerformPendingInstantiations",
+                                   StringRef(""));
+    PerformPendingInstantiations();
+  }
+
+  assert(LateParsedInstantiations.empty() &&
+         "end of TU template instantiation should not create more "
+         "late-parsed templates");
 }
 
 /// ActOnEndOfTranslationUnit - This is called at the very end of the
@@ -882,64 +924,31 @@ void Sema::ActOnEndOfTranslationUnit() {
   if (PP.isCodeCompletionEnabled())
     return;
 
-  // Transfer late parsed template instantiations over to the pending template
-  // instantiation list. During normal compliation, the late template parser
-  // will be installed and instantiating these templates will succeed.
-  //
-  // If we are building a TU prefix for serialization, it is also safe to
-  // transfer these over, even though they are not parsed. The end of the TU
-  // should be outside of any eager template instantiation scope, so when this
-  // AST is deserialized, these templates will not be parsed until the end of
-  // the combined TU.
-  PendingInstantiations.insert(PendingInstantiations.end(),
-                               LateParsedInstantiations.begin(),
-                               LateParsedInstantiations.end());
-  LateParsedInstantiations.clear();
-
   // Complete translation units and modules define vtables and perform implicit
   // instantiations. PCH files do not.
   if (TUKind != TU_Prefix) {
     DiagnoseUseOfUnimplementedSelectors();
 
-    // If DefinedUsedVTables ends up marking any virtual member functions it
-    // might lead to more pending template instantiations, which we then need
-    // to instantiate.
-    DefineUsedVTables();
-
-    // C++: Perform implicit template instantiations.
-    //
-    // FIXME: When we perform these implicit instantiations, we do not
-    // carefully keep track of the point of instantiation (C++ [temp.point]).
-    // This means that name lookup that occurs within the template
-    // instantiation will always happen at the end of the translation unit,
-    // so it will find some names that are not required to be found. This is
-    // valid, but we could do better by diagnosing if an instantiation uses a
-    // name that was not visible at its first point of instantiation.
-    if (ExternalSource) {
-      // Load pending instantiations from the external source.
-      SmallVector<PendingImplicitInstantiation, 4> Pending;
-      ExternalSource->ReadPendingInstantiations(Pending);
-      for (auto PII : Pending)
-        if (auto Func = dyn_cast<FunctionDecl>(PII.first))
-          Func->setInstantiationIsPending(true);
-      PendingInstantiations.insert(PendingInstantiations.begin(),
-                                   Pending.begin(), Pending.end());
-    }
-
-    {
-      llvm::TimeTraceScope TimeScope("PerformPendingInstantiations",
-                                     StringRef(""));
-      PerformPendingInstantiations();
-    }
-
-    assert(LateParsedInstantiations.empty() &&
-           "end of TU template instantiation should not create more "
-           "late-parsed templates");
+    ActOnEndOfTranslationUnitFragment(
+        !ModuleScopes.empty() && ModuleScopes.back().Module->Kind ==
+                                     Module::PrivateModuleFragment
+            ? TUFragmentKind::Private
+            : TUFragmentKind::Normal);
 
     if (LateTemplateParserCleanup)
       LateTemplateParserCleanup(OpaqueParser);
 
     CheckDelayedMemberExceptionSpecs();
+  } else {
+    // If we are building a TU prefix for serialization, it is safe to transfer
+    // these over, even though they are not parsed. The end of the TU should be
+    // outside of any eager template instantiation scope, so when this AST is
+    // deserialized, these templates will not be parsed until the end of the
+    // combined TU.
+    PendingInstantiations.insert(PendingInstantiations.end(),
+                                 LateParsedInstantiations.begin(),
+                                 LateParsedInstantiations.end());
+    LateParsedInstantiations.clear();
   }
 
   DiagnoseUnterminatedPragmaPack();
@@ -997,13 +1006,24 @@ void Sema::ActOnEndOfTranslationUnit() {
     checkUndefinedButUsed(*this);
   }
 
+  // A global-module-fragment is only permitted within a module unit.
+  bool DiagnosedMissingModuleDeclaration = false;
+  if (!ModuleScopes.empty() &&
+      ModuleScopes.back().Module->Kind == Module::GlobalModuleFragment &&
+      !ModuleScopes.back().ImplicitGlobalModuleFragment) {
+    Diag(ModuleScopes.back().BeginLoc,
+         diag::err_module_declaration_missing_after_global_module_introducer);
+    DiagnosedMissingModuleDeclaration = true;
+  }
+
   if (TUKind == TU_Module) {
     // If we are building a module interface unit, we need to have seen the
     // module declaration by now.
     if (getLangOpts().getCompilingModule() ==
             LangOptions::CMK_ModuleInterface &&
         (ModuleScopes.empty() ||
-         ModuleScopes.back().Module->Kind != Module::ModuleInterfaceUnit)) {
+         !ModuleScopes.back().Module->isModulePurview()) &&
+        !DiagnosedMissingModuleDeclaration) {
       // FIXME: Make a better guess as to where to put the module declaration.
       Diag(getSourceManager().getLocForStartOfFile(
                getSourceManager().getMainFileID()),
