@@ -1130,3 +1130,29 @@ void fCXX11MemberInitTest2() {
   // TODO: we'd expect the warning: {{2 uninitializeds field}}
   CXX11MemberInitTest2(); // no-warning
 }
+
+//===----------------------------------------------------------------------===//
+// "Esoteric" primitive type tests.
+//===----------------------------------------------------------------------===//
+
+struct MyAtomicInt {
+  _Atomic(int) x; // expected-note{{uninitialized field 'this->x'}}
+  int dontGetFilteredByNonPedanticMode = 0;
+
+  MyAtomicInt() {} // expected-warning{{1 uninitialized field}}
+};
+
+void _AtomicTest() {
+  MyAtomicInt b;
+}
+
+struct VectorSizeLong {
+  VectorSizeLong() {}
+  __attribute__((__vector_size__(16))) long x;
+};
+
+void __vector_size__LongTest() {
+  // TODO: Warn for v.x.
+  VectorSizeLong v;
+  v.x[0] = 0;
+}

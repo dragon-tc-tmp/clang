@@ -8732,8 +8732,10 @@ DeclResult Sema::ActOnExplicitInstantiation(
                                        ? TSK_ExplicitInstantiationDefinition
                                        : TSK_ExplicitInstantiationDeclaration;
 
-  if (TSK == TSK_ExplicitInstantiationDeclaration) {
-    // Check for dllexport class template instantiation declarations.
+  if (TSK == TSK_ExplicitInstantiationDeclaration &&
+      !Context.getTargetInfo().getTriple().isWindowsGNUEnvironment()) {
+    // Check for dllexport class template instantiation declarations,
+    // except for MinGW mode.
     for (const ParsedAttr &AL : Attr) {
       if (AL.getKind() == ParsedAttr::AT_DLLExport) {
         Diag(ExternLoc,
@@ -8792,6 +8794,19 @@ DeclResult Sema::ActOnExplicitInstantiation(
 
   TemplateSpecializationKind PrevDecl_TSK
     = PrevDecl ? PrevDecl->getTemplateSpecializationKind() : TSK_Undeclared;
+
+  if (TSK == TSK_ExplicitInstantiationDefinition && PrevDecl != nullptr &&
+      Context.getTargetInfo().getTriple().isWindowsGNUEnvironment()) {
+    // Check for dllexport class template instantiation definitions in MinGW
+    // mode, if a previous declaration of the instantiation was seen.
+    for (const ParsedAttr &AL : Attr) {
+      if (AL.getKind() == ParsedAttr::AT_DLLExport) {
+        Diag(AL.getLoc(),
+             diag::warn_attribute_dllexport_explicit_instantiation_def);
+        break;
+      }
+    }
+  }
 
   if (CheckExplicitInstantiation(*this, ClassTemplate, TemplateNameLoc,
                                  SS.isSet(), TSK))
@@ -8946,6 +8961,14 @@ DeclResult Sema::ActOnExplicitInstantiation(
       // attribute to the Specialization; we just need to make it take effect.
       assert(Def == Specialization &&
              "Def and Specialization should match for implicit instantiation");
+      dllExportImportClassTemplateSpecialization(*this, Def);
+    }
+
+    // In MinGW mode, export the template instantiation if the declaration
+    // was marked dllexport.
+    if (PrevDecl_TSK == TSK_ExplicitInstantiationDeclaration &&
+        Context.getTargetInfo().getTriple().isWindowsGNUEnvironment() &&
+        PrevDecl->hasAttr<DLLExportAttr>()) {
       dllExportImportClassTemplateSpecialization(*this, Def);
     }
 
@@ -9421,6 +9444,20 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
     // explicit specialization.
     if (HasNoEffect)
       return (Decl*) nullptr;
+  }
+
+  // HACK: libc++ has a bug where it attempts to explicitly instantiate the
+  // functions
+  //     valarray<size_t>::valarray(size_t) and
+  //     valarray<size_t>::~valarray()
+  // that it declared to have internal linkage with the internal_linkage
+  // attribute. Ignore the explicit instantiation declaration in this case.
+  if (Specialization->hasAttr<InternalLinkageAttr>() &&
+      TSK == TSK_ExplicitInstantiationDeclaration) {
+    if (auto *RD = dyn_cast<CXXRecordDecl>(Specialization->getDeclContext()))
+      if (RD->getIdentifier() && RD->getIdentifier()->isStr("valarray") &&
+          RD->isInStdNamespace())
+        return (Decl*) nullptr;
   }
 
   ProcessDeclAttributeList(S, Specialization, D.getDeclSpec().getAttributes());
