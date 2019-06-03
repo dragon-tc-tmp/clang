@@ -27,10 +27,11 @@
 #include "clang/AST/StmtObjC.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/Type.h"
-#include "clang/Analysis/Support/BumpVector.h"
 #include "clang/Analysis/ConstructionContext.h"
+#include "clang/Analysis/Support/BumpVector.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/ExceptionSpecificationType.h"
+#include "clang/Basic/JsonSupport.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
@@ -1431,12 +1432,40 @@ std::unique_ptr<CFG> CFGBuilder::buildCFG(const Decl *D, Stmt *Statement) {
   if (badCFG)
     return nullptr;
 
-  // For C++ constructor add initializers to CFG.
-  if (const CXXConstructorDecl *CD = dyn_cast_or_null<CXXConstructorDecl>(D)) {
+  // For C++ constructor add initializers to CFG. Constructors of virtual bases
+  // are ignored unless the object is of the most derived class.
+  //   class VBase { VBase() = default; VBase(int) {} };
+  //   class A : virtual public VBase { A() : VBase(0) {} };
+  //   class B : public A {};
+  //   B b; // Constructor calls in order: VBase(), A(), B().
+  //        // VBase(0) is ignored because A isn't the most derived class.
+  // This may result in the virtual base(s) being already initialized at this
+  // point, in which case we should jump right onto non-virtual bases and
+  // fields. To handle this, make a CFG branch. We only need to add one such
+  // branch per constructor, since the Standard states that all virtual bases
+  // shall be initialized before non-virtual bases and direct data members.
+  if (const auto *CD = dyn_cast_or_null<CXXConstructorDecl>(D)) {
+    CFGBlock *VBaseSucc = nullptr;
     for (auto *I : llvm::reverse(CD->inits())) {
+      if (BuildOpts.AddVirtualBaseBranches && !VBaseSucc &&
+          I->isBaseInitializer() && I->isBaseVirtual()) {
+        // We've reached the first virtual base init while iterating in reverse
+        // order. Make a new block for virtual base initializers so that we
+        // could skip them.
+        VBaseSucc = Succ = B ? B : &cfg->getExit();
+        Block = createBlock();
+      }
       B = addInitializer(I);
       if (badCFG)
         return nullptr;
+    }
+    if (VBaseSucc) {
+      // Make a branch block for potentially skipping virtual base initializers.
+      Succ = VBaseSucc;
+      B = createBlock();
+      B->setTerminator(
+          CFGTerminator(nullptr, CFGTerminator::VirtualBaseBranch));
+      addSuccessor(B, Block, true);
     }
   }
 
@@ -1769,6 +1798,9 @@ void CFGBuilder::addImplicitDtorsForDestructor(const CXXDestructorDecl *DD) {
 
   // At the end destroy virtual base objects.
   for (const auto &VI : RD->vbases()) {
+    // TODO: Add a VirtualBaseBranch to see if the most derived class
+    // (which is different from the current class) is responsible for
+    // destroying them.
     const CXXRecordDecl *CD = VI.getType()->getAsCXXRecordDecl();
     if (!CD->hasTrivialDestructor()) {
       autoCreateBlock();
@@ -5066,6 +5098,9 @@ public:
       OS << "(Temp Dtor) ";
       Visit(T.getStmt());
       break;
+    case CFGTerminator::VirtualBaseBranch:
+      OS << "(See if most derived ctor has already initialized vbases)";
+      break;
     }
   }
 };
@@ -5525,6 +5560,17 @@ void CFGBlock::printTerminator(raw_ostream &OS,
                                const LangOptions &LO) const {
   CFGBlockTerminatorPrint TPrinter(OS, nullptr, PrintingPolicy(LO));
   TPrinter.print(getTerminator());
+}
+
+/// printTerminatorJson - Pretty-prints the terminator in JSON format.
+void CFGBlock::printTerminatorJson(raw_ostream &Out, const LangOptions &LO,
+                                   bool AddQuotes) const {
+  std::string Buf;
+  llvm::raw_string_ostream TempOut(Buf);
+
+  printTerminator(TempOut, LO);
+
+  Out << JsonFormat(TempOut.str(), AddQuotes);
 }
 
 Stmt *CFGBlock::getTerminatorCondition(bool StripParens) {
